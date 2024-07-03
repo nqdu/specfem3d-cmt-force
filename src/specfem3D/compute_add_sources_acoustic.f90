@@ -694,12 +694,13 @@
 
 ! returns source time function value for specified time
 
-  use specfem_par, only: USE_FORCE_POINT_SOURCE,USE_RICKER_TIME_FUNCTION,USE_TRICK_FOR_BETTER_PRESSURE, &
+  use specfem_par, only: USE_RICKER_TIME_FUNCTION,USE_TRICK_FOR_BETTER_PRESSURE, &
                          USE_SOURCE_ENCODING,pm1_source_encoding, &
                          hdur,hdur_Gaussian,force_stf
 
   ! for external STFs
   use specfem_par, only: USE_EXTERNAL_SOURCE_FILE
+  use specfem_par, only : is_pointforce
 
   implicit none
 
@@ -728,7 +729,8 @@
   endif
 
   ! determines source time function value
-  if (USE_FORCE_POINT_SOURCE) then
+  !if (USE_FORCE_POINT_SOURCE) then
+  if(is_pointforce(isource)) then 
     ! single point force
     select case(force_stf(isource))
     case (0)

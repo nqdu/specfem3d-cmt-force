@@ -176,6 +176,7 @@
     deallocate(nu_source)
     deallocate(user_source_time_function)
   endif
+  if(allocated(is_pointforce)) deallocate(is_pointforce)
 
   ! receivers
   if (nrec > 0) then

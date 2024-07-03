@@ -425,6 +425,14 @@
       write(*,*)
     endif
 
+    !read  USE_CMT_AND_FORCESOLUTION
+    call read_value_logical(USE_CMT_AND_FORCESOLUTION,'USE_CMT_AND_FORCESOLUTION',ier)
+    if(ier /= 0) then 
+      some_parameters_missing_from_Par_file = .true.
+      write(*,'(a)') 'USE_CMT_AND_FORCESOLUTION          = .false.'
+      write(*,*)
+    endif
+
     call read_value_logical(USE_RICKER_TIME_FUNCTION, 'USE_RICKER_TIME_FUNCTION', ier)
     if (ier /= 0) then
       some_parameters_missing_from_Par_file = .true.
@@ -438,6 +446,7 @@
       write(*,'(a)') 'USE_EXTERNAL_SOURCE_FILE        = .false.'
       write(*,*)
     endif
+    if(USE_CMT_AND_FORCESOLUTION) USE_FORCE_POINT_SOURCE = .true.
 
     call read_value_logical(PRINT_SOURCE_TIME_FUNCTION, 'PRINT_SOURCE_TIME_FUNCTION', ier)
     if (ier /= 0) then
@@ -1225,7 +1234,25 @@
     NSOURCES = 0
   else
     ! gets number of sources
-    call count_number_of_sources(NSOURCES,sources_filename)
+    NSOURCES_CMT = 0
+    NSOURCES_FORCE = 0
+    if(USE_CMT_AND_FORCESOLUTION) then 
+      sources_filename = IN_DATA_FILES(1:len_trim(IN_DATA_FILES))//'FORCESOLUTION'
+      call count_number_of_sources(nsources_force,sources_filename,.TRUE.)
+      sources_filename = IN_DATA_FILES(1:len_trim(IN_DATA_FILES))//'CMTSOLUTION'
+      call count_number_of_sources(nsources_cmt,sources_filename,.FALSE.)
+      NSOURCES = NSOURCES_CMT + NSOURCES_FORCE
+    else 
+      ! source file name has be assgined above
+      NSOURCES_CMT = 0
+      NSOURCES_FORCE = 0
+      call count_number_of_sources(NSOURCES,sources_filename,USE_FORCE_POINT_SOURCE) 
+      if(USE_FORCE_POINT_SOURCE) then 
+        NSOURCES_FORCE = NSOURCES
+      else 
+        NSOURCES_FORCE = NSOURCES
+      endif
+    endif
   endif
 
   ! converts all string characters to lowercase
@@ -1391,6 +1418,7 @@
   call bcast_all_singlel(USE_RICKER_TIME_FUNCTION)
   call bcast_all_singlel(USE_EXTERNAL_SOURCE_FILE)
   call bcast_all_singlel(PRINT_SOURCE_TIME_FUNCTION)
+  call bcast_all_singlel(USE_CMT_AND_FORCESOLUTION)
 
   ! seismograms
   call bcast_all_singlei(NTSTEP_BETWEEN_OUTPUT_SEISMOS)
@@ -1463,6 +1491,8 @@
   call bcast_all_singlei(NGNOD2D)
 
   call bcast_all_singlei(NSOURCES)
+  call bcast_all_singlei(NSOURCES_CMT)
+  call bcast_all_singlei(NSOURCES_FORCE)
   call bcast_all_singlel(HAS_FINITE_FAULT_SOURCE)
 
   end subroutine broadcast_computed_parameters

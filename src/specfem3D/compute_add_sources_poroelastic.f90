@@ -30,7 +30,7 @@
   subroutine compute_add_sources_poroelastic()
 
   use constants
-  use specfem_par, only: station_name,network_name,USE_FORCE_POINT_SOURCE, &
+  use specfem_par, only: station_name,network_name, &
                          nsources_local,tshift_src,dt,t0,USE_LDDRK,istage, &
                          USE_BINARY_FOR_SEISMOGRAMS,ibool, &
                          UNDO_ATTENUATION_AND_OR_PML, &
@@ -42,9 +42,11 @@
 
   use specfem_par_poroelastic, only: b_accels_poroelastic,b_accelw_poroelastic,accels_poroelastic,accelw_poroelastic, &
                                       rhoarraystore,phistore,tortstore,ispec_is_poroelastic
-
+  
   ! coupling
   use shared_parameters, only: COUPLE_WITH_INJECTION_TECHNIQUE
+
+  use specfem_par, only : is_pointforce
 
   ! faults
   use specfem_par, only: FAULT_SIMULATION
@@ -122,7 +124,8 @@
 
                 ! we distinguish between a single force which can be applied both in fluid and solid
                 ! and a moment-tensor source which only makes sense for a solid
-                if (USE_FORCE_POINT_SOURCE) then
+                !if (USE_FORCE_POINT_SOURCE) then
+                if(is_pointforce(isource)) then 
                   ! single point force
                   ! the source is applied to both solid and fluid phase: bulk source.
                   fac_s = 1._CUSTOM_REAL - phil/tortl
@@ -331,7 +334,8 @@
 
                 ! we distinguish between a single force which can be applied both in fluid and solid
                 ! and a moment-tensor source which only makes sense for a solid
-                if (USE_FORCE_POINT_SOURCE) then
+                !if (USE_FORCE_POINT_SOURCE) then
+                if(is_pointforce(isource)) then 
                   ! single point force
                   ! the source is applied to both solid and fluid phase: bulk source.
                   fac_s = 1._CUSTOM_REAL - phil/tortl
@@ -369,11 +373,12 @@
 
 ! returns source time function value for specified time
 
-  use specfem_par, only: USE_FORCE_POINT_SOURCE,USE_RICKER_TIME_FUNCTION, &
+  use specfem_par, only: USE_RICKER_TIME_FUNCTION, &
                          hdur,hdur_Gaussian,force_stf
 
   ! for external STFs
   use specfem_par, only: USE_EXTERNAL_SOURCE_FILE
+  use specfem_par, only: is_pointforce
 
   implicit none
 
@@ -399,7 +404,8 @@
   endif
 
   ! determines source time function value
-  if (USE_FORCE_POINT_SOURCE) then
+  !if (USE_FORCE_POINT_SOURCE) then
+  if(is_pointforce(isource)) then 
     ! single point force
     select case(force_stf(isource))
     case (0)

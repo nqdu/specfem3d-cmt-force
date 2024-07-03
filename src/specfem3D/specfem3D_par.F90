@@ -157,6 +157,9 @@ module specfem_par
   double precision, dimension(:), allocatable :: comp_dir_vect_source_N
   double precision, dimension(:), allocatable :: comp_dir_vect_source_Z_UP
 
+  ! source type flags
+  logical,dimension(:),allocatable            :: is_pointforce
+
   !-----------------------------------------------------------------
   ! receivers
   !-----------------------------------------------------------------

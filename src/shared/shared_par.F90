@@ -166,6 +166,9 @@ end module constants
   logical :: USE_RICKER_TIME_FUNCTION,PRINT_SOURCE_TIME_FUNCTION
   logical :: HAS_FINITE_FAULT_SOURCE
 
+  ! flag to use both cmt + force solutions
+  logical :: USE_CMT_AND_FORCESOLUTION
+
   ! external source time function
   logical :: USE_EXTERNAL_SOURCE_FILE
 
@@ -222,6 +225,9 @@ end module constants
 
   ! number of sources given in CMTSOLUTION file
   integer :: NSOURCES
+
+  ! number of sources given in CMTSOLUTION/FORCESOLUTION file
+  integer :: NSOURCES_CMT, NSOURCES_FORCE
 
   ! anchor points
   integer :: NGNOD2D

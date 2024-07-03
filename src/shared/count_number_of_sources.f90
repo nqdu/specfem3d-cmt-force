@@ -25,7 +25,8 @@
 !
 !=====================================================================
 
-  subroutine count_number_of_sources(NSOURCES,sources_filename)
+  !subroutine count_number_of_sources(NSOURCES,sources_filename)
+  subroutine count_number_of_sources(NSOURCES,sources_filename,file_is_force)
 
 ! determines number of sources depending on number of lines in source file
 ! (only executed by main process)
@@ -43,6 +44,7 @@
 
   integer,intent(out) :: NSOURCES
   character(len=MAX_STRING_LEN),intent(in) :: sources_filename
+  logical,intent(in)  :: file_is_force 
 
   ! local variables
   integer :: icounter,ier
@@ -78,7 +80,8 @@
   if (HAS_FINITE_FAULT_SOURCE) return
 
   ! get the number of lines describing the sources
-  if (USE_FORCE_POINT_SOURCE) then
+  !if (USE_FORCE_POINT_SOURCE) then
+  if(file_is_force) then 
     ! FORCESOLUTION
     nlines_per_source = NLINES_PER_FORCESOLUTION_SOURCE
   else
@@ -113,7 +116,8 @@
 
   ! checks lines are a multiple
   if (mod(icounter,nlines_per_source) /= 0) then
-    if (USE_FORCE_POINT_SOURCE) then
+    !if (USE_FORCE_POINT_SOURCE) then
+    if(file_is_force) then 
       print *,'Error: total number of lines in FORCESOLUTION file should be a multiple of ',nlines_per_source
       stop 'Error total number of lines in FORCESOLUTION file should be a multiple of NLINES_PER_FORCESOLUTION_SOURCE'
     else

@@ -45,6 +45,7 @@
     force_stf,factor_force_source,comp_dir_vect_source_E,comp_dir_vect_source_N,comp_dir_vect_source_Z_UP, &
     xi_source,eta_source,gamma_source,nu_source, &
     ispec_selected_source,islice_selected_source
+  use specfem_par,only : is_pointforce,USE_CMT_AND_FORCESOLUTION
 
   ! PML
   use pml_par, only: is_CPML
@@ -125,6 +126,12 @@
     ! number to output about ~50 steps, rounds to the next multiple of 500
     num_output_info = max(500,int(ceiling(ceiling(NSOURCES/50.0)/500.0)*500))
   endif
+
+  ! allocate source flag arrays
+  allocate(is_pointforce(NSOURCES),stat=ier)
+  is_pointforce(:) = .true.
+  if((.not.USE_CMT_AND_FORCESOLUTION) .AND.(.NOT. USE_FORCE_POINT_SOURCE)) is_pointforce(:) = .FALSE.
+  if (ier /= 0) call exit_MPI(myrank,'Error allocating is_pointforce arrays')
 
   ! allocates temporary arrays
   allocate(moment_tensor(6,NSOURCES), &
@@ -437,7 +444,8 @@
         endif
 
         ! source location (reference element)
-        if (USE_FORCE_POINT_SOURCE) then
+        !if (USE_FORCE_POINT_SOURCE) then
+        if(is_pointforce(isource)) then 
           ! single point force
           write(IMAIN,*) '  using force point source: '
           write(IMAIN,*) '    xi coordinate of source in that element: ',xi_source(isource)
@@ -471,7 +479,8 @@
           write(IMAIN,*)
         else
           ! STF details
-          if (USE_FORCE_POINT_SOURCE) then
+          !if (USE_FORCE_POINT_SOURCE) then
+          if(is_pointforce(isource)) then 
             ! force sources
             ! single point force
             ! prints frequency content for point forces
@@ -578,7 +587,8 @@
         write(IMAIN,*)
 #else
         write(IMAIN,*) '  magnitude of the source:'
-        if (USE_FORCE_POINT_SOURCE) then
+        !if (USE_FORCE_POINT_SOURCE) then
+        if(is_pointforce(isource)) then 
           ! single point force
           write(IMAIN,*) '    factor = ', factor_force_source(isource)
         else
@@ -653,7 +663,8 @@
       endif  ! end of detailed output to locate source
 
       ! checks CMTSOLUTION format for acoustic case
-      if (idomain(isource) == IDOMAIN_ACOUSTIC .and. .not. USE_FORCE_POINT_SOURCE) then
+      !if (idomain(isource) == IDOMAIN_ACOUSTIC .and. .not. USE_FORCE_POINT_SOURCE) then
+      if (idomain(isource) == IDOMAIN_ACOUSTIC .and. .not. is_pointforce(isource)) then
         if (Mxx(isource) /= Myy(isource) .or. Myy(isource) /= Mzz(isource) .or. &
            Mxy(isource) > TINYVAL .or. Mxz(isource) > TINYVAL .or. Myz(isource) > TINYVAL) then
           write(IMAIN,*)
@@ -761,10 +772,15 @@
   if (HAS_FINITE_FAULT_SOURCE) return
 
   ! determines source file name
-  if (USE_FORCE_POINT_SOURCE) then
+  if(USE_CMT_AND_FORCESOLUTION) then
     SOURCE_FILE = IN_DATA_FILES(1:len_trim(IN_DATA_FILES))//'FORCESOLUTION'
-  else
-    SOURCE_FILE = IN_DATA_FILES(1:len_trim(IN_DATA_FILES))//'CMTSOLUTION'
+    SOURCE_FILE = trim(SOURCE_FILE) // ' and  ' //  IN_DATA_FILES(1:len_trim(IN_DATA_FILES))//'CMTSOLUTION'
+  else 
+    if (USE_FORCE_POINT_SOURCE) then
+      SOURCE_FILE = IN_DATA_FILES(1:len_trim(IN_DATA_FILES))//'FORCESOLUTION'
+    else
+      SOURCE_FILE = IN_DATA_FILES(1:len_trim(IN_DATA_FILES))//'CMTSOLUTION'
+    endif 
   endif
 
   ! see if we are running several independent runs in parallel
@@ -787,30 +803,16 @@
   endif
 
   ! reads in source descriptions
-  if (USE_FORCE_POINT_SOURCE) then
-    ! point forces
-    if (myrank == 0) then
-      ! only main process reads in FORCESOLUTION file
-      call get_force(filename,tshift_src,hdur, &
-                     lat,lon,depth,NSOURCES, &
-                     min_tshift_src_original,force_stf,factor_force_source, &
-                     comp_dir_vect_source_E,comp_dir_vect_source_N,comp_dir_vect_source_Z_UP, &
-                     user_source_time_function)
-    endif
-    ! broadcasts specific point force infos
-    call bcast_all_i(force_stf,NSOURCES)
-    call bcast_all_dp(factor_force_source,NSOURCES)
-    call bcast_all_dp(comp_dir_vect_source_E,NSOURCES)
-    call bcast_all_dp(comp_dir_vect_source_N,NSOURCES)
-    call bcast_all_dp(comp_dir_vect_source_Z_UP,NSOURCES)
-  else
+  if(USE_CMT_AND_FORCESOLUTION) then
+    filename = IN_DATA_FILES(1:len_trim(IN_DATA_FILES))//'CMTSOLUTION'
+    filename = trim(filename)
     ! CMT moment tensors
     if (myrank == 0) then
       ! only main process reads in CMTSOLUTION file
       call get_cmt(filename,yr,jda,mo,da,ho,mi,sec, &
                    tshift_src,hdur, &
                    lat,lon,depth,moment_tensor, &
-                   DT,NSOURCES,min_tshift_src_original,user_source_time_function)
+                   DT,NSOURCES_CMT,min_tshift_src_original,user_source_time_function) 
 
       ! stores infos for ASDF/SAC files
       yr_PDE = yr     ! year
@@ -819,8 +821,66 @@
       mi_PDE = mi     ! minute
       sec_PDE = sec   ! second
     endif
-    ! broadcasts specific moment tensor infos
     call bcast_all_dp(moment_tensor,6*NSOURCES)
+    is_pointforce(1:NSOURCES_CMT) = .false.
+
+    ! FORCE
+    filename = IN_DATA_FILES(1:len_trim(IN_DATA_FILES))//'FORCESOLUTION'
+    filename = trim(filename)
+    if (myrank == 0) then
+      ! only main process reads in FORCESOLUTION file
+      call get_force(filename,tshift_src(NSOURCES_CMT+1),hdur(NSOURCES_CMT+1), &
+                    lat(NSOURCES_CMT+1),lon(NSOURCES_CMT+1),depth(NSOURCES_CMT+1),NSOURCES_FORCE, &
+                    min_tshift_src_original,force_stf(NSOURCES_CMT+1),&
+                    factor_force_source(NSOURCES_CMT+1), &
+                    comp_dir_vect_source_E(NSOURCES_CMT+1),&
+                    comp_dir_vect_source_N(NSOURCES_CMT+1),&
+                    comp_dir_vect_source_Z_UP(NSOURCES_CMT+1), &
+                    user_source_time_function(:,NSOURCES_CMT+1:NSOURCES))
+    endif
+    ! broadcasts specific point force infos
+    call bcast_all_i(force_stf,NSOURCES)
+    call bcast_all_dp(factor_force_source,NSOURCES)
+    call bcast_all_dp(comp_dir_vect_source_E,NSOURCES)
+    call bcast_all_dp(comp_dir_vect_source_N,NSOURCES)
+    call bcast_all_dp(comp_dir_vect_source_Z_UP,NSOURCES)
+    is_pointforce(NSOURCES_CMT+1:NSOURCES) = .true.
+  else 
+    if (USE_FORCE_POINT_SOURCE) then
+      ! point forces
+      if (myrank == 0) then
+        ! only main process reads in FORCESOLUTION file
+        call get_force(filename,tshift_src,hdur, &
+                      lat,lon,depth,NSOURCES, &
+                      min_tshift_src_original,force_stf,factor_force_source, &
+                      comp_dir_vect_source_E,comp_dir_vect_source_N,comp_dir_vect_source_Z_UP, &
+                      user_source_time_function)
+      endif
+      ! broadcasts specific point force infos
+      call bcast_all_i(force_stf,NSOURCES)
+      call bcast_all_dp(factor_force_source,NSOURCES)
+      call bcast_all_dp(comp_dir_vect_source_E,NSOURCES)
+      call bcast_all_dp(comp_dir_vect_source_N,NSOURCES)
+      call bcast_all_dp(comp_dir_vect_source_Z_UP,NSOURCES)
+    else
+      ! CMT moment tensors
+      if (myrank == 0) then
+        ! only main process reads in CMTSOLUTION file
+        call get_cmt(filename,yr,jda,mo,da,ho,mi,sec, &
+                    tshift_src,hdur, &
+                    lat,lon,depth,moment_tensor, &
+                    DT,NSOURCES,min_tshift_src_original,user_source_time_function)
+
+        ! stores infos for ASDF/SAC files
+        yr_PDE = yr     ! year
+        jda_PDE = jda   ! day of the year
+        ho_PDE = ho     ! hour
+        mi_PDE = mi     ! minute
+        sec_PDE = sec   ! second
+      endif
+      ! broadcasts specific moment tensor infos
+      call bcast_all_dp(moment_tensor,6*NSOURCES)
+    endif
   endif
 
   ! broadcasts general source information read on the main to the nodes

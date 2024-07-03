@@ -190,19 +190,29 @@
     endif
     write(IMAIN,*)
 
-    if (USE_FORCE_POINT_SOURCE) then
-       write(IMAIN,*) 'using a FORCESOLUTION source instead of a CMTSOLUTION source'
-    else
-       write(IMAIN,*) 'using a CMTSOLUTION source'
+    if(.not. USE_CMT_AND_FORCESOLUTION) then 
+      if (USE_FORCE_POINT_SOURCE) then
+        write(IMAIN,*) 'using a FORCESOLUTION source instead of a CMTSOLUTION source'
+      else
+        write(IMAIN,*) 'using a CMTSOLUTION source'
+      endif
+    else 
+      write(IMAIN,*) 'using a FORCESOLUTION and a CMTSOLUTION source'
     endif
+
     if (USE_RICKER_TIME_FUNCTION) then
        write(IMAIN,*) '  with a Ricker source time function'
     else
+      if(USE_CMT_AND_FORCESOLUTION) then 
+        write(IMAIN,*) ' CMTSOLUTION with a quasi-Heaviside source time function'
+        write(IMAIN,*) 'FORCESOLUTION with a Gaussian source time function'
+      else
        if (USE_FORCE_POINT_SOURCE) then
           write(IMAIN,*) '  with a quasi-Heaviside source time function'
        else
           write(IMAIN,*) '  with a Gaussian source time function'
        endif
+      endif
     endif
     write(IMAIN,*)
 
