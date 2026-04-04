@@ -175,6 +175,14 @@
   deallocate(ibelm_bottom)
   deallocate(ibelm_top)
 
+  ! fixed and roller boundaries
+  if(allocated(fixed_bdry_ijk)) then 
+    deallocate(fixed_bdry_ijk,fixed_bdry_ispec)
+  endif
+  if(allocated(roller_bdry_ijk)) then 
+     deallocate(roller_bdry_ijk,roller_bdry_ispec,roller_bdry_normal)
+  endif
+
   ! sources
   if (NSOURCES > 0) then
     deallocate(islice_selected_source,ispec_selected_source)

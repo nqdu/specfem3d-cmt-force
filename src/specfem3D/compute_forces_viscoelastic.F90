@@ -48,6 +48,10 @@
     ATTENUATION,ANISOTROPY, &
     MOVIE_VOLUME_STRESS
 
+  ! nqdu added for centrifugal/coriolis force
+  use shared_parameters,only: ROTATION
+  use specfem_par,only: omega => rot_angluar_velocity
+
   use fault_solver_common, only: Kelvin_Voigt_eta,USE_KELVIN_VOIGT_DAMPING
 
   use specfem_par, only: xixstore,xiystore,xizstore,etaxstore,etaystore,etazstore, &
@@ -890,6 +894,12 @@
                                          backward_simulation)
   endif
 
+  if(ROTATION) then 
+    call compute_rot_forces_viscoelastic(iphase,&
+                                              displ,veloc,&
+                                              omega,accel)
+  end if 
+
 
   contains
 
@@ -980,6 +990,66 @@
 
 
   end subroutine compute_forces_viscoelastic
+
+
+  subroutine compute_rot_forces_viscoelastic(iphase,displ,veloc,omega,accel)
+    use constants, only: CUSTOM_REAL,NGLLX,NGLLY,NGLLZ,NDIM
+    use specfem_par, only: ibool,NGLOB_AB,rhostore,jacobianstore
+    use specfem_par, only: wxgll,wygll,wzgll 
+    use specfem_par_elastic,only: phase_ispec_inner_elastic,&
+                                  nspec_inner_elastic,nspec_outer_elastic
+
+    implicit none
+    integer,intent(in) :: iphase
+    real(kind=CUSTOM_REAL), dimension(NDIM,NGLOB_AB),intent(in) ::displ,veloc
+    real(kind=CUSTOM_REAL), dimension(NDIM,NGLOB_AB),intent(inout) :: accel
+    real(kind=CUSTOM_REAL), intent(in) :: omega(NDIM)
+
+    ! local variables
+    integer :: i,j,k,iglob,ispec_p,ispec,num_elements 
+    real(kind=CUSTOM_REAL) :: cori(NDIM), centri(NDIM)
+    real(kind=CUSTOM_REAL) :: u(NDIM),v(NDIM), fac 
+
+    ! choses inner/outer elements
+    if (iphase == 1) then
+      num_elements = nspec_outer_elastic
+    else
+      num_elements = nspec_inner_elastic
+    endif
+
+    do ispec_p = 1,num_elements
+      ispec = phase_ispec_inner_elastic(ispec_p,iphase)
+
+      do k = 1,NGLLZ; do j = 1,NGLLY; do i = 1,NGLLX
+        iglob = ibool(i,j,k,ispec)
+        ! get velocity and displacement at this GLL point
+        u(:) = displ(:,iglob)
+        v(:) = veloc(:,iglob)
+
+        ! factors
+        fac = rhostore(i,j,k,ispec) * jacobianstore(i,j,k,ispec) * &
+              real(wxgll(i)*wygll(j)*wzgll(k),kind=CUSTOM_REAL)
+              
+        ! compute Coriolis force F = -2*omega x v
+        cori(1) = 2._CUSTOM_REAL * (omega(2)*v(3) - omega(3)*v(2))
+        cori(2) = 2._CUSTOM_REAL * (omega(3)*v(1) - omega(1)*v(3))
+        cori(3) = 2._CUSTOM_REAL * (omega(1)*v(2) - omega(2)*v(1))
+
+        ! compute centrifugal force F = - omega x (omega x u)
+        centri(1) = omega(2)*omega(2)*u(1) + omega(3)*omega(3)*u(1) - omega(1)*omega(2)*u(2) - &
+                    omega(1)*omega(3)*u(3)
+        centri(2) = omega(3)*omega(3)*u(2) + omega(1)*omega(1)*u(2) - omega(2)*omega(3)*u(3) - &
+                    omega(1)*omega(2)*u(1)
+        centri(3) = omega(1)*omega(1)*u(3) + omega(2)*omega(2)*u(3) - omega(1)*omega(3)*u(1) - &
+                    omega(2)*omega(3)*u(2)
+        
+        ! add contributions to acceleration
+        accel(:,iglob) = accel(:,iglob) + fac * (cori(:) + centri(:))
+
+      enddo; enddo; enddo; 
+    enddo
+
+  end subroutine compute_rot_forces_viscoelastic
 
 !
 !-------------------------------------------------------------------------------------------------
@@ -2512,4 +2582,3 @@
   enddo
 
   end subroutine mxm8_3comp_3dmat_single
-

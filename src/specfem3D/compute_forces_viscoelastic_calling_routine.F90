@@ -78,6 +78,8 @@
   ! forward fields
   backward_simulation = .false.
 
+  call elastic_enforce_fixed_boundary()
+
   ! kbai added the following two synchronizations to ensure that the displacement and velocity values
   ! at nodes on MPI interfaces stay equal on all processors that share the node.
   ! Do this only for dynamic rupture simulations
@@ -404,6 +406,10 @@
     call kernel_3_a_cuda(Mesh_pointer,deltatover2,b_deltatover2,APPROXIMATE_OCEAN_LOAD,1) ! 1 == forward
   endif
 
+  if(ROTATION .and. (.not. GPU_MODE)) then  
+    call invert_mass_with_rotation(rot_angluar_velocity,accel)
+  endif
+
   ! updates acceleration with ocean load term
   if (APPROXIMATE_OCEAN_LOAD) then
     if (.not. GPU_MODE) then
@@ -449,6 +455,8 @@
       call kernel_3_b_cuda(Mesh_pointer,deltatover2,b_deltatover2,1) ! 1 == forward
     endif
   endif
+
+  call elastic_enforce_fixed_boundary()
 
   ! PML
   if (PML_CONDITIONS) then
@@ -900,3 +908,77 @@
 
   end subroutine compute_forces_viscoelastic_GPU_calling
 
+  !> NQDU added 
+  !> Inverts the mass matrix with rotation for the case of a rotating reference frame.
+  subroutine invert_mass_with_rotation(omega,accel)
+    use constants, only: CUSTOM_REAL
+    use specfem_par, only: NGLOB_AB, NDIM, deltat
+    implicit none
+    
+    real(kind=CUSTOM_REAL), intent(in) :: omega(NDIM)
+    real(kind=CUSTOM_REAL), dimension(NDIM, NGLOB_AB), intent(inout) :: accel
+
+    integer :: iglob
+    double precision :: sx, sy, sz, fx_star, fy_star, fz_star
+    double precision :: invdet, s_dot_f, cx, cy, cz, ax, ay, az   
+
+    ! 1. Pure rotation vector & determinant (Global constants)
+    sx = dble(omega(1)) * deltat
+    sy = dble(omega(2)) * deltat
+    sz = dble(omega(3)) * deltat
+    invdet = 1.0d0 / (1.0d0 + (sx*sx) + (sy*sy) + (sz*sz))
+
+    ! 2. Perfectly contiguous, zero-branching global node loop
+    do iglob = 1, NGLOB_AB
+      
+      ! 3. f* (Acoustic nodes natively become 0.0 here)
+      fx_star = dble(accel(1, iglob))
+      fy_star = dble(accel(2, iglob))
+      fz_star = dble(accel(3, iglob))
+
+      ! 4. Vector math
+      s_dot_f = (sx * fx_star) + (sy * fy_star) + (sz * fz_star)
+
+      cx = (sy * fz_star) - (sz * fy_star)
+      cy = (sz * fx_star) - (sx * fz_star)
+      cz = (sx * fy_star) - (sy * fx_star)
+
+      ! 5. Final rotated acceleration (Acoustic nodes natively output 0.0)
+      ax = invdet * (fx_star - cx + (s_dot_f * sx))
+      ay = invdet * (fy_star - cy + (s_dot_f * sy))
+      az = invdet * (fz_star - cz + (s_dot_f * sz))
+
+      accel(1, iglob) = real(ax, kind=CUSTOM_REAL)
+      accel(2, iglob) = real(ay, kind=CUSTOM_REAL)
+      accel(3, iglob) = real(az, kind=CUSTOM_REAL)
+
+    enddo
+    
+  end subroutine invert_mass_with_rotation
+
+  subroutine elastic_enforce_fixed_boundary()
+    use specfem_par, only: ibool, num_fixed_bdry_faces
+    use specfem_par,only: fixed_bdry_ijk,fixed_bdry_ispec
+    use specfem_par_elastic, only: accel, displ, veloc,ispec_is_elastic
+    use constants, only: NGLLSQUARE
+    implicit none
+
+    integer :: iglob, i,j,k,igll2,iface,ispec
+
+    do iface = 1, num_fixed_bdry_faces
+      ispec = fixed_bdry_ispec(iface)
+      if (.not. ispec_is_elastic(ispec)) cycle ! skip if not elastic
+      do igll2 = 1, NGLLSQUARE
+        i = fixed_bdry_ijk(1,igll2,iface)
+        j = fixed_bdry_ijk(2,igll2,iface)
+        k = fixed_bdry_ijk(3,igll2,iface)
+        iglob = ibool(i,j,k,ispec)
+        if (iglob > 0) then
+          accel(:,iglob) = 0.0
+          displ(:,iglob) = 0.0
+          veloc(:,iglob) = 0.0
+        endif
+      enddo 
+    enddo
+
+  end subroutine elastic_enforce_fixed_boundary

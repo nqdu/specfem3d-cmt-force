@@ -74,6 +74,9 @@
   ! prepares gravity arrays
   call prepare_gravity()
 
+  ! prepares rotation forces
+  call prepare_rotation_force()
+
   ! ZN I do not use if (USE_LDDRK) call prepare_timerun_lddrk()
   ! ZN in order to avoid the error of using unallocated arrays later on in the code,
   ! ZN since R_**_lddrk are arguments in subroutine compute_forces_viscoelastic
@@ -1562,3 +1565,41 @@
   call synchronize_all()
 
   end subroutine prepare_timerun_faults
+
+
+  subroutine prepare_rotation_force()
+    use constants, only: CUSTOM_REAL,MAX_STRING_LEN,IMAIN
+    use specfem_par,only: rot_angluar_velocity,ROTATION,myrank 
+    implicit none
+
+    character(len=MAX_STRING_LEN) :: line
+    integer :: ier  
+
+    if(.not. ROTATION) then
+      ! if rotation is not turned on, we can just return without doing anything
+      return
+    endif
+
+    if (myrank == 0) then
+      ! open parameter file
+      call open_parameter_file(ier) 
+
+      call read_value_string(line, 'ROTATION_OMEGA', ier)
+
+      read(line,*) rot_angluar_velocity
+
+      call close_parameter_file()
+    endif
+
+    ! broadcast to all processes
+    call bcast_all_cr(rot_angluar_velocity,size(rot_angluar_velocity))
+
+    if(myrank == 0) then 
+      write(IMAIN,*) "preparing rotation force"
+      write(IMAIN,*) "  rotation angular velocity (rad/s): ", rot_angluar_velocity
+      call flush_IMAIN()
+    endif 
+
+    call synchronize_all()
+    
+  end subroutine prepare_rotation_force
