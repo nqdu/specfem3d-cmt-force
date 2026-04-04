@@ -593,6 +593,14 @@
     enddo
     close(IIN_DB)
   endif
+  
+  open(unit=IIN_DB, file=localpath_name(1:len_trim(localpath_name))//&
+        '/'//trim(FNAME_WAVEFIELD_DISCONTINUITY_INTERFACE), &
+        status='old', form='formatted',iostat=ier)
+  do ib = 1, nb_wd
+    read(IIN_DB, *, iostat=ier) boundary_to_ispec_wd(ib), side_wd(ib)
+  enddo
+  close(IIN_DB)
 
   ! reads in absorbing boundary files
   open(unit=IIN_DB, file=localpath_name(1:len_trim(localpath_name))//'/absorbing_surface_file_xmin', &
@@ -820,6 +828,63 @@
   enddo
   close(IIN_DB)
   print *, '  nspec2D_top = ', nspec2D_top
+
+
+  ! reads in fixed boundary surfaces
+  open(unit=IIN_DB, file=localpath_name(1:len_trim(localpath_name))//'/fixed_surface_file', &
+        status='old', form='formatted',iostat=ier)
+  if (ier /= 0) then
+    nspec2D_fixed = 0
+    print *, '  no fixed_surface_file found'
+  else
+    read(IIN_DB,*) nspec2D_fixed
+  endif
+  if (nspec2D_fixed > 0) then
+    allocate(ifelm(nspec2D_fixed),stat=ier)
+    if (ier /= 0) call exit_MPI_without_rank('error allocating array 92')
+    if (ier /= 0) stop 'Error allocating array ifelm'
+    allocate(nodes_ifelm(NGNOD2D,nspec2D_fixed),stat=ier)
+    if (ier /= 0) call exit_MPI_without_rank('error allocating array 93')
+    if (ier /= 0) stop 'Error allocating array nodes_ifelm'
+  else
+    ! dummy allocation
+    allocate(ifelm(1),nodes_ifelm(1,1))
+  endif
+  ifelm(:) = 0; nodes_ifelm(:,:) = 0
+  do ispec2D = 1,nspec2D_fixed
+    ! format: #id_(element containing the face) #id_node1_face .. #id_node4_face
+    read(IIN_DB,*) ifelm(ispec2D), (nodes_ifelm(inode,ispec2D), inode=1,NGNOD2D)
+  enddo
+  close(IIN_DB)
+  print *, '  nspec2D_fixed = ', nspec2D_fixed
+
+  ! read in roller boundary files (optional)
+  open(unit=IIN_DB, file=localpath_name(1:len_trim(localpath_name))//'/roller_surface_file', &
+        status='old', form='formatted',iostat=ier)
+  if (ier /= 0) then
+    nspec2D_roller = 0
+    print *, '  no roller_surface_file file found'
+  else
+    read(IIN_DB,*) nspec2D_roller
+  endif 
+  if(nspec2D_roller > 0) then
+    allocate(irelm(nspec2D_roller),stat=ier)
+    if (ier /= 0) call exit_MPI_without_rank('error allocating array 94')
+    if (ier /= 0) stop 'Error allocating array irelm'
+    allocate(nodes_irelm(NGNOD2D,nspec2D_roller),stat=ier)
+    if (ier /= 0) call exit_MPI_without_rank('error allocating array 95')
+    if (ier /= 0) stop 'Error allocating array nodes_irelm'
+  else
+    ! dummy allocation
+    allocate(irelm(1),nodes_irelm(1,1))
+  endif
+  irelm(:) = 0; nodes_irelm(:,:) = 0
+  do ispec2D = 1,nspec2D_roller
+    ! format: #id_(element containing the face) #id_node1_face .. #id_node4_face
+    read(IIN_DB,*) irelm(ispec2D), (nodes_irelm(inode,ispec2D), inode=1,NGNOD2D)
+  enddo
+  close(IIN_DB)
+  print *, '  nspec2D_roller = ', nspec2D_roller
 
 ! an array of size 0 is a valid object in Fortran 90, i.e. the array is then considered as allocated
 ! and can thus for instance be used as an argument in a call to a subroutine without giving any error

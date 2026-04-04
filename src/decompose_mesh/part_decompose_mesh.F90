@@ -859,6 +859,55 @@ contains
 
   end subroutine write_boundaries_database
 
+  subroutine write_user_boundaries(IIN_database, iproc, nspec, nspec2D_usr, &
+                                    ielm_usr, nodes_ielm_usr, glob2loc_elmnts,&
+                                    glob2loc_nodes_nparts, &
+                                    glob2loc_nodes_parts, glob2loc_nodes, part, NGNOD2D)
+  implicit none
+  integer, intent(in)  :: IIN_database
+  integer, intent(in)  :: iproc
+  integer, intent(in)  :: nspec
+  integer, intent(in)  :: NGNOD2D
+  integer, intent(in)  :: nspec2D_usr
+  integer, dimension(nspec2D_usr), intent(in) :: ielm_usr
+  integer, dimension(NGNOD2D,nspec2D_usr), intent(in) :: nodes_ielm_usr
+  integer, dimension(:), pointer :: glob2loc_elmnts
+  integer, dimension(:), pointer :: glob2loc_nodes_nparts
+  integer, dimension(:), pointer :: glob2loc_nodes_parts
+  integer, dimension(:), pointer :: glob2loc_nodes
+  integer, dimension(1:nspec)  :: part
+
+  ! local
+  integer :: loc_nspec2D_usr
+  integer :: i,j,inode
+  integer, dimension(NGNOD2D) :: loc_node
+
+  ! counts number of elements for boundary at xmin, xmax, ymin, ymax, bottom, top in this partition
+  loc_nspec2D_usr = 0
+  do i = 1,nspec2D_usr
+     if (part(ielm_usr(i)) == iproc) then
+        loc_nspec2D_usr = loc_nspec2D_usr + 1
+     endif
+  enddo
+  write(IIN_database) 8, loc_nspec2D_usr
+
+  do i = 1,nspec2D_usr
+     if (part(ielm_usr(i)) == iproc) then
+        do inode = 1,NGNOD2D
+        do j = glob2loc_nodes_nparts(nodes_ielm_usr(inode,i)-1), &
+                glob2loc_nodes_nparts(nodes_ielm_usr(inode,i))-1
+           if (glob2loc_nodes_parts(j) == iproc) then
+              loc_node(inode) = glob2loc_nodes(j)+1
+           endif
+        enddo
+        enddo
+        write(IIN_database) glob2loc_elmnts(ielm_usr(i)-1)+1, (loc_node(inode), inode = 1,NGNOD2D)
+     endif
+  enddo
+
+
+  end subroutine write_user_boundaries
+
   !--------------------------------------------------
   ! Write C-PML elements indices, CPML-regions and thickness of C-PML layer
   ! pertaining to iproc partition in the corresponding Database

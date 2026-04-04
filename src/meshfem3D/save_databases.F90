@@ -382,6 +382,10 @@
     !      ibool(NGLLX_M,NGLLY_M,NGLLZ_M,ibelm_top(i)),ibool(1,NGLLY_M,NGLLZ_M,ibelm_top(i))
   enddo
 
+  ! compatibility for fixed and roller boundaries (note: not used in xgenerate_database, this option will be enabled in SAVE_CUBIT_MESH = .true.
+  write(IIN_database) 8,0
+  write(IIN_database) 8,0
+
   ! CPML
   !
   ! note: check with routine write_cpml_database() to produce identical output

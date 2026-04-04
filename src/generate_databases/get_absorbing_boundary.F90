@@ -929,3 +929,193 @@
 
   end subroutine get_absorbing_boundary
 
+
+subroutine get_physical_boundary(nspec,ibool, &
+                                nodes_coords_ext_mesh,nnodes_ext_mesh, &
+                                ifelm,irelm,nodes_ifelm, nodes_irelm, &
+                                nspec2D_fixed,nspec2D_roller)
+! determines physical boundaries (fixed and roller), 2D jacobians, face normals
+
+  use constants, only: myrank,NGLLX,NGLLY,NGLLZ,NDIM,NGNOD2D_FOUR_CORNERS,IMAIN
+
+  use create_regions_mesh_ext_par
+
+  ! common normals
+  use constants, only: NGLLSQUARE
+  use generate_databases_par, only : NGNOD2D
+
+  implicit none
+  
+
+  ! number of spectral elements in each block
+  integer,intent(in) :: nspec
+
+  ! arrays with the mesh
+  integer, dimension(NGLLX,NGLLY,NGLLZ,nspec),intent(in) :: ibool
+
+  ! data from the external mesh
+  integer,intent(in) :: nnodes_ext_mesh
+  double precision, dimension(NDIM,nnodes_ext_mesh),intent(in) :: nodes_coords_ext_mesh
+
+  ! absorbing boundaries (as defined in CUBIT)
+  integer,intent(in)  :: nspec2D_fixed,nspec2D_roller
+  ! element indices containing a boundary
+  integer, dimension(nspec2D_fixed),intent(in) :: ifelm
+  integer, dimension(nspec2D_roller),intent(in) :: irelm
+
+  ! corner node indices of boundary faces coming from CUBIT
+  integer, dimension(NGNOD2D,nspec2D_fixed),intent(in) :: nodes_ifelm 
+  integer, dimension(NGNOD2D,nspec2D_roller),intent(in) :: nodes_irelm
+
+  ! local parameters
+  ! (assumes NGLLX=NGLLY=NGLLZ)
+  real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY) :: jacobian2Dw_face
+  real(kind=CUSTOM_REAL), dimension(NDIM,NGLLX,NGLLY) :: normal_face
+  real(kind=CUSTOM_REAL), dimension(NDIM) :: lnormal
+
+  integer :: ijk_face(3,NGLLX,NGLLY)
+
+  ! face corner locations
+  real(kind=CUSTOM_REAL),dimension(NGNOD2D_FOUR_CORNERS) :: xcoord,ycoord,zcoord
+  integer :: ispec,ispec2D,icorner,iface,i,j,igllfree
+
+  ! fixed boundary counter
+  integer :: ifixed, iroller,total_num
+
+  ! initialize counter for fixed boundaries
+  ifixed = 0
+  call sum_all_i(nspec2D_fixed,total_num)
+  if (myrank == 0) then
+    write(IMAIN,*) '     boundary fixed   :',total_num
+    call flush_IMAIN()
+  endif
+  ijk_face(:,:,:) = 0
+  normal_face(:,:,:) = 0.0_CUSTOM_REAL
+  jacobian2Dw_face(:,:) = 0.0_CUSTOM_REAL
+
+  do ispec2D = 1,nspec2D_fixed
+    ! sets element
+    ispec = ifelm(ispec2D)
+
+    ! looks for i,j,k indices of GLL points on boundary face
+    ! determines element face by given CUBIT corners
+    do icorner = 1,NGNOD2D_FOUR_CORNERS
+      xcoord(icorner) = nodes_coords_ext_mesh(1,nodes_ifelm(icorner,ispec2D))
+      ycoord(icorner) = nodes_coords_ext_mesh(2,nodes_ifelm(icorner,ispec2D))
+      zcoord(icorner) = nodes_coords_ext_mesh(3,nodes_ifelm(icorner,ispec2D))
+    enddo
+
+    ! sets face id of reference element associated with this face
+    call get_element_face_id(ispec,xcoord,ycoord,zcoord, &
+                             ibool,nspec,nglob_unique, &
+                             xstore_unique,ystore_unique,zstore_unique,iface)
+
+
+    ! ijk indices of GLL points on face
+    call get_element_face_gll_indices(iface,ijk_face,NGLLX,NGLLZ)
+
+    ! weighted jacobian and normal
+    call get_jacobian_boundary_face(nspec, &
+                                    xstore_unique,ystore_unique,zstore_unique,ibool,nglob_unique, &
+                                    dershape2D_x,dershape2D_y,dershape2D_bottom,dershape2D_top, &
+                                    wgllwgll_xy,wgllwgll_xz,wgllwgll_yz, &
+                                    ispec,iface,jacobian2Dw_face,normal_face,NGLLX,NGLLZ,NGNOD2D)
+
+    ! normal convention: points away from element
+    ! switch normal direction if necessary
+    do j = 1,NGLLZ
+      do i = 1,NGLLX
+        lnormal(:) = normal_face(:,i,j)
+        call get_element_face_normal(ispec,iface,xcoord,ycoord,zcoord, &
+                                     ibool,nspec,nglob_unique, &
+                                     xstore_unique,ystore_unique,zstore_unique, &
+                                     lnormal )
+        normal_face(:,i,j) = lnormal(:)
+      enddo
+    enddo
+
+    ! store normals and jacobians for fixed boundary
+    ifixed = ifixed + 1
+    fixed_bdry_ispec(ifixed) = ispec
+
+    igllfree = 0
+    do j = 1,NGLLZ
+      do i = 1,NGLLX
+        igllfree = igllfree + 1
+        fixed_bdry_ijk(:,igllfree,ifixed) = ijk_face(:,i,j)
+        !fixed_bdry_normal(:,igllfree,ifixed) = normal_face(:,i,j) 
+        !fixed_bdry_jacobian2Dw(igllfree,ifixed) = jacobian2Dw_face(i,j) --- IGNORE ---
+      enddo
+    enddo 
+  enddo 
+  close(10)
+
+  ! roller 
+  ! initialize counter for fixed boundaries
+  iroller = 0
+  call sum_all_i(nspec2D_roller,total_num)
+  if (myrank == 0) then
+    write(IMAIN,*) '     boundary roller  :',total_num
+    call flush_IMAIN()
+  endif
+  ijk_face(:,:,:) = 0
+  normal_face(:,:,:) = 0.0_CUSTOM_REAL
+  jacobian2Dw_face(:,:) = 0.0_CUSTOM_REAL
+
+  do ispec2D = 1,nspec2D_roller
+    ! sets element
+    ispec = irelm(ispec2D)
+
+    ! looks for i,j,k indices of GLL points on boundary face
+    ! determines element face by given CUBIT corners
+    do icorner = 1,NGNOD2D_FOUR_CORNERS
+      xcoord(icorner) = nodes_coords_ext_mesh(1,nodes_irelm(icorner,ispec2D))
+      ycoord(icorner) = nodes_coords_ext_mesh(2,nodes_irelm(icorner,ispec2D))
+      zcoord(icorner) = nodes_coords_ext_mesh(3,nodes_irelm(icorner,ispec2D))
+    enddo
+
+    ! sets face id of reference element associated with this face
+    call get_element_face_id(ispec,xcoord,ycoord,zcoord, &
+                             ibool,nspec,nglob_unique, &
+                             xstore_unique,ystore_unique,zstore_unique,iface)
+
+
+    ! ijk indices of GLL points on face
+    call get_element_face_gll_indices(iface,ijk_face,NGLLX,NGLLZ)
+
+    ! weighted jacobian and normal
+    call get_jacobian_boundary_face(nspec, &
+                                    xstore_unique,ystore_unique,zstore_unique,ibool,nglob_unique, &
+                                    dershape2D_x,dershape2D_y,dershape2D_bottom,dershape2D_top, &
+                                    wgllwgll_xy,wgllwgll_xz,wgllwgll_yz, &
+                                    ispec,iface,jacobian2Dw_face,normal_face,NGLLX,NGLLZ,NGNOD2D)
+
+    ! normal convention: points away from element
+    ! switch normal direction if necessary
+    do j = 1,NGLLZ
+      do i = 1,NGLLX
+        lnormal(:) = normal_face(:,i,j)
+        call get_element_face_normal(ispec,iface,xcoord,ycoord,zcoord, &
+                                     ibool,nspec,nglob_unique, &
+                                     xstore_unique,ystore_unique,zstore_unique, &
+                                     lnormal )
+        normal_face(:,i,j) = lnormal(:)
+      enddo
+    enddo
+
+    ! store normals and jacobians for roller boundary
+    iroller = iroller + 1
+    roller_bdry_ispec(iroller) = ispec
+
+    igllfree = 0
+    do j = 1,NGLLZ
+      do i = 1,NGLLX
+        igllfree = igllfree + 1
+        roller_bdry_ijk(:,igllfree, iroller) = ijk_face(:,i,j)
+        roller_bdry_normal(:,igllfree, iroller) = normal_face(:,i,j) 
+        !roller_bdry_jacobian2Dw(igllfree, iroller) = jacobian2Dw_face(i,j) --- IGNORE ---
+      enddo
+    enddo 
+  enddo 
+
+end subroutine get_physical_boundary

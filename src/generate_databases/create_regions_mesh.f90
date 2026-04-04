@@ -52,6 +52,12 @@
       nodes_ibelm_bottom,nodes_ibelm_top, &
       nspec2D_moho_ext,ibelm_moho,nodes_ibelm_moho
 
+  ! fixed/roller boundary conditions
+  use generate_databases_par,only: &
+      ielm_fixed,ielm_roller, &
+      nspec2D_fixed,nspec2D_roller, &
+      nodes_ielm_fixed,nodes_ielm_roller
+
   ! global index array
   use generate_databases_par, only: nspec => NSPEC_AB, nglob => NGLOB_AB, ibool, xstore, ystore, zstore
 
@@ -92,6 +98,11 @@
   call crm_ext_allocate_arrays(nspec2D_xmin,nspec2D_xmax,nspec2D_ymin,nspec2D_ymax, &
                                nspec2D_bottom,nspec2D_top, &
                                nodes_coords_ext_mesh,nnodes_ext_mesh,elmnts_ext_mesh,nelmnts_ext_mesh)
+
+  
+  ! allocate memory for physical boundaries 
+  ! NQDU
+  call crm_phy_allocate_arrays()
 
   ! if faults exist this reads nodes_coords_open
   call fault_read_input(prname)
@@ -178,6 +189,19 @@
   ! user output
   call print_timing()
 
+  call synchronize_all()
+  if (myrank == 0) then
+    write(IMAIN,*)
+    write(IMAIN,*) '  ...setting up physical boundaries'
+    call flush_IMAIN()
+  endif
+  ! sets up physical boundaries
+  call get_physical_boundary(nspec,ibool, &
+                            nodes_coords_ext_mesh,nnodes_ext_mesh, &
+                            ielm_fixed,ielm_roller,&
+                            nodes_ielm_fixed,nodes_ielm_roller, &
+                            nspec2D_fixed,nspec2D_roller)
+
   ! sets up absorbing/free surface boundaries
   call synchronize_all()
   if (myrank == 0) then
@@ -192,6 +216,7 @@
                               nodes_ibelm_bottom,nodes_ibelm_top, &
                               nspec2D_xmin,nspec2D_xmax,nspec2D_ymin,nspec2D_ymax, &
                               nspec2D_bottom,nspec2D_top)
+
 
   ! user output
   call print_timing()
@@ -1942,3 +1967,41 @@ contains
 
   end subroutine crm_setup_mesh_surface
 
+
+  subroutine crm_phy_allocate_arrays()
+    use create_regions_mesh_ext_par 
+    use generate_databases_par
+    implicit none
+    
+    integer :: nfaces,ier 
+
+    ! fixed boundary
+    nfaces = nspec2D_fixed
+    if (nfaces > 0) then
+      allocate(fixed_bdry_ijk(3,NGLLSQUARE,nfaces), &
+               fixed_bdry_ispec(nfaces),stat=ier)
+      if (ier /= 0) call exit_MPI_without_rank('error allocating array 841')
+    else 
+      allocate(fixed_bdry_ijk(1,1,1), &
+               fixed_bdry_ispec(1),stat=ier)
+      if (ier /= 0) call exit_MPI_without_rank('error allocating array 842')
+    endif
+    num_fixed_bdry_faces = nfaces
+
+    ! roller boundary
+    nfaces = nspec2D_roller
+    if (nfaces > 0) then
+      allocate(roller_bdry_ijk(3,NGLLSQUARE,nfaces), &
+               roller_bdry_normal(3,NGLLSQUARE,nfaces), &
+               roller_bdry_ispec(nfaces),stat=ier)
+      if (ier /= 0) call exit_MPI_without_rank('error allocating array 843')
+    else
+      allocate(roller_bdry_ijk(1,1,1), &
+               roller_bdry_normal(1,1,1), &
+               roller_bdry_ispec(1),stat=ier)
+      if (ier /= 0) call exit_MPI_without_rank('error allocating array 844')
+    endif
+    num_roller_bdry_faces = nfaces
+
+     ! free surface
+  end subroutine crm_phy_allocate_arrays

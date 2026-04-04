@@ -111,6 +111,10 @@
   integer, dimension(:,:), allocatable :: nodes_ibelm_xmin,nodes_ibelm_xmax, &
               nodes_ibelm_ymin, nodes_ibelm_ymax, nodes_ibelm_bottom, nodes_ibelm_top
 
+  ! fixed/roller boundary elements
+  integer :: nspec2D_fixed, nspec2D_roller 
+  integer, dimension(:), allocatable :: ielm_fixed, ielm_roller 
+  integer, dimension(:,:), allocatable :: nodes_ielm_fixed, nodes_ielm_roller
 
   ! C-PML absorbing boundary conditions
   ! local number of C-PML spectral elements
@@ -248,6 +252,18 @@
   integer, dimension(:,:,:), allocatable :: free_surface_ijk
   integer, dimension(:), allocatable :: free_surface_ispec
   integer :: num_free_surface_faces
+
+  ! fixed boundary arrays
+  integer, dimension(:,:,:), allocatable :: fixed_bdry_ijk
+  integer, dimension(:), allocatable :: fixed_bdry_ispec
+  integer :: num_fixed_bdry_faces
+
+  ! roller boundary arrays
+  real(kind=CUSTOM_REAL), dimension(:,:,:), allocatable :: roller_bdry_normal ! shape(NDIM,num_roller_bdry_faces)
+  !real(kind=CUSTOM_REAL), dimension(:,:), allocatable :: roller_bdry_jacobian2Dw
+  integer, dimension(:,:,:), allocatable :: roller_bdry_ijk ! shape(NDIM,NGLLnum_roller_bdry_faces)
+  integer, dimension(:), allocatable :: roller_bdry_ispec
+  integer :: num_roller_bdry_faces
 
   ! acoustic-elastic coupling surface
   real(kind=CUSTOM_REAL), dimension(:,:,:), allocatable :: coupling_ac_el_normal

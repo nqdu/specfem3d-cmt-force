@@ -269,6 +269,21 @@
     write(IOUT) free_surface_normal
   endif
 
+  ! fixed surface
+  write(IOUT) num_fixed_bdry_faces
+  if (num_fixed_bdry_faces > 0) then
+    write(IOUT) fixed_bdry_ispec
+    write(IOUT) fixed_bdry_ijk
+  endif
+
+  ! roller 
+  write(IOUT) num_roller_bdry_faces
+  if (num_roller_bdry_faces > 0) then
+    write(IOUT) roller_bdry_ispec
+    write(IOUT) roller_bdry_ijk
+    write(IOUT) roller_bdry_normal
+  endif
+
   ! acoustic-elastic coupling surface
   write(IOUT) num_coupling_ac_el_faces
   if (num_coupling_ac_el_faces > 0) then

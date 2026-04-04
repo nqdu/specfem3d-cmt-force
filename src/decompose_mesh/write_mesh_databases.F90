@@ -123,6 +123,16 @@
                                   nodes_ibelm_ymax, nodes_ibelm_bottom, nodes_ibelm_top, &
                                   glob2loc_elmnts, glob2loc_nodes_nparts, &
                                   glob2loc_nodes_parts, glob2loc_nodes, part, NGNOD2D)
+    
+    ! writes out fixed boundary conditions
+    call write_user_boundaries(IIN_database, ipart, nspec, nspec2D_fixed, ifelm, nodes_ifelm, &
+                               glob2loc_elmnts, glob2loc_nodes_nparts, glob2loc_nodes_parts, &
+                               glob2loc_nodes, part, NGNOD2D)
+    
+    ! writes out roller boundary conditions
+    call write_user_boundaries(IIN_database, ipart, nspec, nspec2D_roller, irelm, nodes_irelm, &
+                               glob2loc_elmnts, glob2loc_nodes_nparts, glob2loc_nodes_parts, &
+                               glob2loc_nodes, part, NGNOD2D)
 
     ! writes out C-PML elements indices, CPML-regions and thickness of C-PML layer
     call write_cpml_database(IIN_database, ipart, nspec, nspec_cpml, CPML_to_spec, &

@@ -892,6 +892,42 @@
     call bcast_all_cr_for_database(free_surface_jacobian2Dw(1,1), size(free_surface_jacobian2Dw,kind=4))
     call bcast_all_cr_for_database(free_surface_normal(1,1,1), size(free_surface_normal,kind=4))
   endif
+  
+  ! fixed surface
+  if(I_should_read_the_database) read(IIN) num_fixed_bdry_faces
+  call bcast_all_i_for_database(num_fixed_bdry_faces, 1)
+  allocate(fixed_bdry_ispec(num_fixed_bdry_faces),stat=ier)
+  if (ier /= 0) call exit_MPI_without_rank('error allocating array 1540')
+  allocate(fixed_bdry_ijk(3,NGLLSQUARE,num_fixed_bdry_faces),stat=ier)
+  if (ier /= 0) call exit_MPI_without_rank('error allocating array 154')
+  if(num_fixed_bdry_faces > 0) then
+    if (I_should_read_the_database) then
+      read(IIN) fixed_bdry_ispec
+      read(IIN) fixed_bdry_ijk
+    endif
+    call bcast_all_i_for_database(fixed_bdry_ispec(1), size(fixed_bdry_ispec,kind=4))
+    call bcast_all_i_for_database(fixed_bdry_ijk(1,1,1), size(fixed_bdry_ijk,kind=4))
+  endif
+
+  ! roller surface
+  if(I_should_read_the_database) read(IIN) num_roller_bdry_faces
+  call bcast_all_i_for_database(num_roller_bdry_faces, 1)
+  allocate(roller_bdry_ispec(num_roller_bdry_faces),stat=ier)
+  if (ier /= 0) call exit_MPI_without_rank('error allocating array 1541')
+  allocate(roller_bdry_ijk(3,NGLLSQUARE,num_roller_bdry_faces),stat=ier)
+  if (ier /= 0) call exit_MPI_without_rank('error allocating array 1542')
+  allocate(roller_bdry_normal(NDIM,NGLLSQUARE,num_roller_bdry_faces),stat=ier)
+  if (ier /= 0) call exit_MPI_without_rank('error allocating array 1543')
+  if(num_roller_bdry_faces > 0) then
+    if (I_should_read_the_database) then
+      read(IIN) roller_bdry_ispec
+      read(IIN) roller_bdry_ijk
+      read(IIN) roller_bdry_normal
+    endif
+    call bcast_all_i_for_database(roller_bdry_ispec(1), size(roller_bdry_ispec,kind=4))
+    call bcast_all_i_for_database(roller_bdry_ijk(1,1,1), size(roller_bdry_ijk,kind=4))
+    call bcast_all_cr_for_database(roller_bdry_normal(1,1,1), size(roller_bdry_normal,kind=4))
+  endif
 
   ! acoustic-elastic coupling surface
   if (I_should_read_the_database) read(IIN) num_coupling_ac_el_faces

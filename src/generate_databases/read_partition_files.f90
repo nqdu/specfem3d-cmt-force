@@ -269,6 +269,48 @@
   endif
   call synchronize_all()
 
+  ! fixed boundaries
+  read(IIN) boundary_number, nspec2D_fixed
+  if(nspec2D_fixed > 0) then
+    allocate(ielm_fixed(nspec2D_fixed),nodes_ielm_fixed(NGNOD2D,nspec2D_fixed),stat=ier)
+    if (ier /= 0) call exit_MPI_without_rank('error allocating array 595')
+    if (ier /= 0) stop 'Error allocating array ielm_fixed etc.'
+  else
+    allocate(ielm_fixed(1),nodes_ielm_fixed(1,1),stat=ier)
+    if (ier /= 0) stop 'Error allocating dummy array'
+  endif
+  ielm_fixed(:) = 0; nodes_ielm_fixed(:,:) = 0
+  do ispec2D = 1,nspec2D_fixed
+     read(IIN) ielm_fixed(ispec2D),(nodes_ielm_fixed(j,ispec2D),j=1,NGNOD2D)
+  enddo
+  call sum_all_i(nspec2D_fixed,nspec_cpml_tot)
+  if (myrank == 0) then
+    write(IMAIN,*) '  total number of fixed elements in the global mesh: ',nspec_cpml_tot
+    call flush_IMAIN()
+  endif
+  call synchronize_all()
+
+  ! roller boundary conditions
+  read(IIN) boundary_number, nspec2D_roller
+  if(nspec2D_roller > 0) then
+    allocate(ielm_roller(nspec2D_roller),nodes_ielm_roller(NGNOD2D,nspec2D_roller),stat=ier)
+    if (ier /= 0) call exit_MPI_without_rank('error allocating array 596')
+    if (ier /= 0) stop 'Error allocating array ielm_roller etc.'
+  else
+    allocate(ielm_roller(1),nodes_ielm_roller(1,1),stat=ier)
+    if (ier /= 0) stop 'Error allocating dummy array'
+  endif
+  ielm_roller(:) = 0; nodes_ielm_roller(:,:) = 0
+  do ispec2D = 1,nspec2D_roller
+     read(IIN) ielm_roller(ispec2D),(nodes_ielm_roller(j,ispec2D),j=1,NGNOD2D)
+  enddo
+  call sum_all_i(nspec2D_roller,nspec_cpml_tot)
+  if (myrank == 0) then
+    write(IMAIN,*) '  total number of roller elements in the global mesh: ',nspec_cpml_tot
+    call flush_IMAIN()
+  endif
+  call synchronize_all()
+
   ! CPML
   ! reads number of C-PML elements in the global mesh
   nspec_cpml_tot = 0

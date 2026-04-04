@@ -35,6 +35,7 @@ module decompose_mesh_par
   use part_decompose_mesh, only: ACOUSTIC_LOAD, &
     write_interfaces_database,write_moho_surface_database,write_glob2loc_nodes_database, &
     write_material_props_database,write_boundaries_database, &
+    write_user_boundaries,&
     write_partition_database,write_cpml_database, &
     acoustic_elastic_poro_load,mesh2dual_ncommonnodes, &
     build_glob2loc_elmnts,build_glob2loc_nodes,build_interfaces,poro_elastic_repartitioning,moho_surface_repartitioning
@@ -92,6 +93,15 @@ module decompose_mesh_par
   integer, dimension(:,:), allocatable :: nodes_ibelm_xmin, nodes_ibelm_xmax, nodes_ibelm_ymin
   integer, dimension(:,:), allocatable :: nodes_ibelm_ymax, nodes_ibelm_bottom, nodes_ibelm_top
 
+  ! fixed booundary conditions
+  integer :: nspec2D_fixed
+  integer, allocatable :: ifelm(:)
+  integer, allocatable :: nodes_ifelm(:,:)
+
+  ! roller boundary conditions
+  integer :: nspec2D_roller
+  integer, allocatable :: irelm(:),nodes_irelm(:,:)
+
   ! C-PML absorbing boundary conditions
   integer :: nspec_cpml
   integer, dimension(:), allocatable :: CPML_to_spec, CPML_regions
@@ -139,6 +149,8 @@ module decompose_mesh_par
   !! side_wd = 9--20: only one edge is on the boundary
   !! side_wd = 21--26: one face is on the boundary
   integer, dimension(:), allocatable :: side_wd
+
+  ! fixed bdry 
 
 end module decompose_mesh_par
 

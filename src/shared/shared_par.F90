@@ -107,6 +107,7 @@ end module constants
   ! physical parameters
   logical :: APPROXIMATE_OCEAN_LOAD,TOPOGRAPHY,ATTENUATION,ANISOTROPY
   logical :: GRAVITY
+  logical :: ROTATION
 
   character(len=MAX_STRING_LEN) :: TOMOGRAPHY_PATH
 

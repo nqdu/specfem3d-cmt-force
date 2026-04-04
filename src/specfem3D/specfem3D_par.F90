@@ -87,6 +87,20 @@ module specfem_par
   integer, dimension(:), allocatable :: free_surface_ispec
   integer :: num_free_surface_faces
 
+  ! fixed boundary arrays
+  integer, dimension(:,:,:), allocatable :: fixed_bdry_ijk
+  integer, dimension(:), allocatable :: fixed_bdry_ispec
+  integer :: num_fixed_bdry_faces
+
+  ! roller boundary arrays
+  real(kind=CUSTOM_REAL), dimension(:,:,:), allocatable :: roller_bdry_normal ! shape(NDIM,num_roller_bdry_nodes)
+  !real(kind=CUSTOM_REAL), dimension(:,:), allocatable :: roller_bdry_jacobian2Dw
+  integer, dimension(:,:,:), allocatable :: roller_bdry_ijk
+  integer, dimension(:), allocatable :: roller_bdry_ispec
+  integer :: num_roller_bdry_faces
+  
+
+
   ! attenuation
   integer :: NSPEC_ATTENUATION_AB
   character(len=MAX_STRING_LEN) :: prname_Q
@@ -323,6 +337,10 @@ module specfem_par
   ! for gravity integrals
   double precision, dimension(NTOTAL_OBSERVATION) :: x_observation,y_observation,z_observation, &
     g_x,g_y,g_z,G_xx,G_yy,G_zz,G_xy,G_xz,G_yz,temporary_array_for_sum
+
+
+  ! ROTATION 
+  real(kind=CUSTOM_REAL) :: rot_angluar_velocity(NDIM)
 
   ! force vectorization
 #ifdef FORCE_VECTORIZATION

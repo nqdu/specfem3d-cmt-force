@@ -485,6 +485,7 @@ SUBDIRS = \
 	meshfem3D \
 	shared \
 	specfem3D \
+	static \
 	tomography/postprocess_sensitivity_kernels \
 	tomography \
 	$(EMPTY_MACRO)
@@ -495,6 +496,7 @@ DEFAULT = \
 	xmeshfem3D \
 	xgenerate_databases \
 	xspecfem3D \
+	xstatic3D \
 	$(EMPTY_MACRO)
 
 # targets requiring MPI
