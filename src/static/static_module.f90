@@ -90,7 +90,8 @@ module static_module
     implicit none
     
     integer :: i,j,k,iglob,ier,ispec
-    integer :: nx,ny,nz,xmin,xmax,ymin,ymax,zmin,zmax 
+    integer :: nx,ny,nz
+    real(kind=dp) :: xmin,xmax,ymin,ymax,zmin,zmax 
     character(len=MAX_STRING_LEN) :: force_filename 
     integer,parameter :: IO_UNIT = 10
     real(kind=dp),allocatable :: tomo_x(:),tomo_y(:),tomo_z(:)
