@@ -370,7 +370,6 @@ module static_module
   end subroutine solve_static_problem
 
   subroutine save_static_field_bin()
-    use my_mpi
     use constants, only: CUSTOM_REAL,MAX_STRING_LEN
     use specfem_par, only: NSPEC_AB,NGLLX,NGLLY,NGLLZ,ibool,myrank,LOCAL_PATH
     use specfem_par_elastic,only : displ
@@ -528,7 +527,6 @@ module static_module
 
   !> main subroutine for static solution, CG metho is used
   subroutine static_problem_impl()
-    use my_mpi
     use constants, only: MAX_STRING_LEN,NDIM
     use specfem_par, only: NGLOB_AB,NGLLX,NGLLY,NGLLZ,myrank 
     use specfem_par_elastic, only : displ
