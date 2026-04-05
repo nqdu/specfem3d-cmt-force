@@ -1083,7 +1083,6 @@ module static_module
 
   function parallel_inner_product(vec1,vec2) result(psum)
     use specfem_par, only: NGLOB_AB,NDIM
-    use my_mpi
     implicit none
 
     real(kind=dp), dimension(NDIM, NGLOB_AB), intent(in) :: vec1, vec2
