@@ -20,7 +20,7 @@ module static_module
     real(kind=CUSTOM_REAL), dimension(:,:), allocatable :: force_ext ! shape(NDIM,NGLOB_AB) external body force
     ! strain and stress tensors
     real(kind=CUSTOM_REAL), dimension(:,:,:,:,:), allocatable :: stress,strain ! shape(NGLLX,NGLLY,NGLLZ,NSPEC,6)
-    end type static_solver_class
+  end type static_solver_class
 
   ! GLOBAL variable to hold static solver class
   type(static_solver_class) :: ssol 
@@ -514,6 +514,8 @@ module static_module
           write(40,12313) station_name(ir),network_name(ir), &
                            seismo_static(:,irloc)
         end do
+        close(40)
+        
       endif 
       call synchronize_all()
     end do
