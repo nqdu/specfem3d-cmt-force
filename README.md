@@ -68,3 +68,10 @@ involved in the community and keep them in the specfem3d github wiki:
 
 SPECFEM3D Cartesian is part of the software that is hosted by the Computational Infrastructure for Geodynamics (CIG). It is available on the CIG website [here (SPECFEM3D Cartesian)](https://geodynamics.org/resources/specfem3dcartesian).
 
+
+## 2026.04.04 
+
+* **Boundary Conditions:** Added support for **fixed** and **roller** boundary conditions within the `decompose mesh` utility and CUBIT-based mesh files.
+* **Static Solver:** Implemented a static solution module using the **Conjugate Gradient (CG)** method, including support for rotational effects and other external forces.
+* **Dynamic Solver:** Introduced a dynamic solution framework incorporating rotational physics (centrifugal and Coriolis forces). This includes a revised formulation for the **inverse mass matrix** to properly account for the **skew-symmetric** nature of the Coriolis matrix.
+* **Examples:** Provided demonstration cases in `centri_cubit.tar.gz`. To execute the examples, follow the workflow outlined in **Steps 1–3**.
