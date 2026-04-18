@@ -384,7 +384,8 @@
   call synchronize_all()
 
   ! frees arrays
-  if (ELASTIC_SIMULATION) then
+  ! nqdd added for rotation
+  if (ELASTIC_SIMULATION .and. (.not. ROTATION)) then
     ! not needed anymore
     deallocate(rmass)
   endif

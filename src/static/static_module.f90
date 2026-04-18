@@ -20,6 +20,16 @@ module static_module
     real(kind=CUSTOM_REAL), dimension(:,:), allocatable :: force_ext ! shape(NDIM,NGLOB_AB) external body force
     ! strain and stress tensors
     real(kind=CUSTOM_REAL), dimension(:,:,:,:,:), allocatable :: stress,strain ! shape(NGLLX,NGLLY,NGLLZ,NSPEC,6)
+  
+    ! for PETSc parallel matrix assembly
+    logical :: USE_PETSC_AS_BACKEND = .true. ! whether to use PETSc as the linear solver backend, if false, a simple CG solver implemented in Fortran will be used, this is mainly for testing and debugging purposes
+    integer(kind=8) :: petcs_ptr ! dummy variable to hold PETSc pointers as integers, will be cast to proper types in C
+    integer, dimension(:), allocatable :: owner_rank ! shape(NGLOB_AB), stores the owning rank for each global DOF, used for parallel assembly with PETSc
+
+    contains 
+      procedure :: init_petsc => create_petsc_backend
+      procedure :: free_petsc => destroy_petsc_backend
+      procedure :: execute => solve_static_problem_petsc
   end type static_solver_class
 
   ! GLOBAL variable to hold static solver class
@@ -41,6 +51,9 @@ module static_module
     ! read parameters for static solver
     call read_params_static()
 
+    ! create PETSc backend if enabled
+    call ssol%init_petsc()
+
     ! get external force from file and interpolate to global points, store in force_ext
     call read_ext_force()
 
@@ -59,16 +72,24 @@ module static_module
       if (ier /= 0) then
         print*, "Error opening parameter file for static module initialization"
         stop 
-      end if
+      endif
 
       ! read static solver parameters
       ssol%is_nonlinear = .false. ! default value
       !call read_value_logical(ssol%SAVE_STATIC_FIELD, "SAVE_STATIC_FIELD",ier)
       ssol%SAVE_STATIC_FIELD = .true. ! default value
 
+      ! read USE_PETSC_AS_BACKEND parameter
+      call read_value_logical(ssol%USE_PETSC_AS_BACKEND, "USE_PETSC_AS_BACKEND",ier)
+      if (ier /= 0) then
+        !print*, "no USE_PETSC_AS_BACKEND specified, default to true"
+        ssol%USE_PETSC_AS_BACKEND = .true.
+      endif
+
+
       ! close
       call close_parameter_file()
-    end if
+    endif
 
     ! broadcast parameters to all ranks
     call bcast_all_singlel(ssol%SAVE_STATIC_FIELD)
@@ -87,18 +108,26 @@ module static_module
                           nibool_interfaces_ext_mesh,ibool_interfaces_ext_mesh, &
                           my_neighbors_ext_mesh,&
                           request_send_vector_ext_mesh,request_recv_vector_ext_mesh
+    use specfem_par, only: fixed_bdry_ijk, fixed_bdry_ispec,num_fixed_bdry_faces
+    use specfem_par, only: num_roller_bdry_faces,roller_bdry_ijk, &
+                            roller_bdry_ispec, roller_bdry_normal
+    use petsc_interfaces, only: fill_vec_petsc
     implicit none
     
-    integer :: i,j,k,iglob,ier,ispec
+    integer :: i,j,k,iglob,ier,ispec,iface,igll2 
     integer :: nx,ny,nz
     real(kind=dp) :: xmin,xmax,ymin,ymax,zmin,zmax 
     character(len=MAX_STRING_LEN) :: force_filename 
     integer,parameter :: IO_UNIT = 10
     real(kind=dp),allocatable :: tomo_x(:),tomo_y(:),tomo_z(:)
     real(kind=dp),allocatable :: tomo_force(:,:,:,:)
-    real(kind=dp) :: fp(NDIM), temp
+    real(kind=dp) :: fp(NDIM), temp, normal_vec(NDIM)
     real(kind=CUSTOM_REAL) :: omega(NDIM), rot_org(NDIM),tempx,tempy,tempz 
-    real(kind=CUSTOM_REAL) :: xp, yp, zp
+    real(kind=CUSTOM_REAL) :: xp, yp,zp
+    integer :: ibool0_loc(NGLLX,NGLLY,NGLLZ)
+
+    ! element wise force terms
+    real(kind=dp), allocatable :: elem_force(:,:,:,:,:) ! shape(NDIM,NGLLX,NGLLY,NGLLZ,nspec)
 
     ! read and interpolate force_ext from file
     if(myrank == 0) then 
@@ -107,7 +136,7 @@ module static_module
       if (ier /= 0) then
         print*, "Error opening parameter file for static module initialization"
         stop 
-      end if
+      endif
 
       ! read whether the model has a rotation system
       call read_value_string(force_filename, "STATIC_FORCE_FILE",ier)
@@ -127,10 +156,10 @@ module static_module
         if (ier /= 0) then
           print*, "Error opening static force file: ", trim(force_filename)
           stop
-        end if
+        endif
 
         ! read dimensions
-        read(IO_UNIT,*) nx, ny, nz
+        read(IO_UNIT,*) nx,  ny, nz
         read(IO_UNIT,*) xmin, xmax, ymin, ymax, zmin, zmax
 
         ! allocate arrays
@@ -140,7 +169,7 @@ module static_module
         ! read data
         do k = 1,nz; do j = 1,ny; do i = 1,nx
           read(IO_UNIT,*) tomo_force(i,j,k,:)
-        end do; end do; end do
+        enddo; enddo; enddo
 
         close(IO_UNIT)
       endif 
@@ -148,13 +177,13 @@ module static_module
       ! set tomo_x/y/z based on bounds and dimensions
       do i = 1, nx
         tomo_x(i) = xmin + (i-1)*(xmax-xmin)/(nx-1)
-      end do
+      enddo
       do j = 1, ny
         tomo_y(j) = ymin + (j-1)*(ymax-ymin)/(ny-1)
-      end do
+      enddo
       do k = 1, nz
         tomo_z(k) = zmin + (k-1)*(zmax-zmin)/(nz-1)
-      end do
+      enddo
 
       ! close Par_file
       call close_parameter_file()
@@ -175,7 +204,7 @@ module static_module
     if(myrank /= 0) then
       allocate(tomo_x(nx), tomo_y(ny), tomo_z(nz))
       allocate(tomo_force(nx,ny,nz,NDIM))
-    end if
+    endif
     call synchronize_all()
 
     ! bcast tomo_x/y/z and tomo_force to all ranks
@@ -195,7 +224,7 @@ module static_module
          if (ier /= 0) then
           print*, "Error reading ROTATION_OMEGA from parameter file, no rotation will be applied"
           stop 
-         end if
+         endif
         read(force_filename,*) omega
 
         call read_value_string(force_filename, "ROTATION_ORIGIN",ier)
@@ -210,19 +239,22 @@ module static_module
         print*, "Rotation origin = ", rot_org
 
         call close_parameter_file()
-      end if
+      endif
 
       ! broadcast rotation parameters if needed
       call bcast_all_cr(omega,size(omega))
       call bcast_all_cr(rot_org,size(rot_org))
-    end if
+    endif
 
     ! set value to parameters for later use
     ssol%omega(:) = omega(:)
     ssol%rot_org(:) = rot_org(:)
 
+    ! allocate elem_force array
+    allocate(elem_force(NDIM,NGLLX,NGLLY,NGLLZ,nspec))
+    elem_force(:,:,:,:,:) = 0.0_dp
+
     ! loop each global point and compute interpolated force, store in force_ext
-    ssol%force_ext(:,:) = 0.0_CUSTOM_REAL
     do ispec = 1, nspec
       do k = 1, NGLLZ
         do j = 1, NGLLY
@@ -232,12 +264,11 @@ module static_module
             call trilinear_interp(nx,ny,nz,tomo_x,tomo_y,tomo_z,tomo_force,&
                                   dble(xstore(iglob)),dble(ystore(iglob)),dble(zstore(iglob)),&
                                   fp)
-            ssol%force_ext(:,iglob) = ssol%force_ext(:,iglob) +  real(fp * temp,kind=CUSTOM_REAL)
-
-          end do
-        end do
-      end do
-    end do
+            elem_force(:,i,j,k,ispec) = fp * temp
+          enddo
+        enddo
+      enddo
+    enddo
 
     ! add rotation force contribution
     do ispec = 1, nspec
@@ -261,33 +292,86 @@ module static_module
             call cross_product(omega(1), omega(2), omega(3), xp, yp, zp, tempx, tempy, tempz)
 
             ! note centrifugal force is - omega x (omega x r), and Coriolis force is - 2 omega x v, but we only consider centrifugal force here since it's a static problem
-            ssol%force_ext(1,iglob) = ssol%force_ext(1,iglob) - real(tempx * temp, kind=CUSTOM_REAL)
-            ssol%force_ext(2,iglob) = ssol%force_ext(2,iglob) - real(tempy * temp, kind=CUSTOM_REAL)
-            ssol%force_ext(3,iglob) = ssol%force_ext(3,iglob) - real(tempz * temp, kind=CUSTOM_REAL)
+            elem_force(1,i,j,k,ispec) = elem_force(1,i,j,k,ispec) - real(tempx * temp, kind=CUSTOM_REAL)
+            elem_force(2,i,j,k,ispec) = elem_force(2,i,j,k,ispec) - real(tempy * temp, kind=CUSTOM_REAL)
+            elem_force(3,i,j,k,ispec) = elem_force(3,i,j,k,ispec) - real(tempz * temp, kind=CUSTOM_REAL)
 
-          end do
-        end do
-      end do
-    end do
+          enddo
+        enddo
+      enddo
+    enddo
 
-    ! mpi sync 
-    call assemble_MPI_vector_async_send(NPROC,NGLOB_AB,ssol%force_ext, &
-                                        buffer_send_vector_ext_mesh,buffer_recv_vector_ext_mesh, &
-                                        num_interfaces_ext_mesh,max_nibool_interfaces_ext_mesh, &
-                                        nibool_interfaces_ext_mesh,ibool_interfaces_ext_mesh, &
-                                        my_neighbors_ext_mesh, &
-                                        request_send_vector_ext_mesh,request_recv_vector_ext_mesh)
-    call assemble_MPI_vector_async_recv(NPROC,NGLOB_AB,ssol%force_ext, &
-                                        buffer_recv_vector_ext_mesh,num_interfaces_ext_mesh, &
-                                        max_nibool_interfaces_ext_mesh, &
-                                        nibool_interfaces_ext_mesh,ibool_interfaces_ext_mesh, &
-                                        request_send_vector_ext_mesh,request_recv_vector_ext_mesh, &
-                                        my_neighbors_ext_mesh)
+    ! apply fixed boundary conditions 
+    do iface = 1, num_fixed_bdry_faces
+    !do iface = 1,0 ! do nothing --- IGNORE ---
+      ispec = fixed_bdry_ispec(iface)
+
+      do igll2 = 1, NGLLX*NGLLZ 
+        i = fixed_bdry_ijk(1,igll2,iface)
+        j = fixed_bdry_ijk(2,igll2,iface)
+        k = fixed_bdry_ijk(3,igll2,iface)
+        
+        elem_force(:,i,j,k,ispec) = 0.0_dp
+      enddo
+    enddo
+
+    ! apply roller boundary conditions
+    do iface = 1, num_roller_bdry_faces
+      ispec = roller_bdry_ispec(iface)
+
+      do igll2 = 1, NGLLX*NGLLZ 
+        i = roller_bdry_ijk(1,igll2,iface)
+        j = roller_bdry_ijk(2,igll2,iface)
+        k = roller_bdry_ijk(3,igll2,iface)
+        
+        normal_vec(:) = roller_bdry_normal(:,igll2,iface)
+        fp(:) = elem_force(:,i,j,k,ispec)
+
+        fp = fp -dot_product(fp, normal_vec) * normal_vec ! remove normal component of the force    
+        elem_force(:,i,j,k,ispec) = fp
+      enddo
+    enddo
+
+    ! check if PETSc assembly is enabled, if so, we need to assemble the global force vector using MPI communication, otherwise we can directly store the interpolated force in force_ext and let the Fortran solver handle the assembly
+    if(ssol%USE_PETSC_AS_BACKEND) then 
+      do ispec = 1,nspec
+        ibool0_loc(:,:,:) = ibool(:,:,:,ispec) - 1 ! convert to 0-based indexing for C
+        call fill_vec_petsc(ssol%petcs_ptr, ibool0_loc, elem_force(:,:,:,:,ispec))
+      enddo
+    else 
+      ! directly store the interpolated force in force_ext
+      ssol%force_ext(:,:) = 0.0_CUSTOM_REAL
+      do ispec = 1, nspec
+        do k = 1, NGLLZ
+          do j = 1, NGLLY
+            do i = 1, NGLLX
+              iglob = ibool(i,j,k,ispec)
+              ssol%force_ext(:,iglob) = ssol%force_ext(:,iglob) + real(elem_force(:,i,j,k,ispec), kind=CUSTOM_REAL)
+            enddo
+          enddo
+        enddo
+      enddo
+
+      ! mpi sync 
+      call assemble_MPI_vector_async_send(NPROC,NGLOB_AB,ssol%force_ext, &
+                                          buffer_send_vector_ext_mesh,buffer_recv_vector_ext_mesh, &
+                                          num_interfaces_ext_mesh,max_nibool_interfaces_ext_mesh, &
+                                          nibool_interfaces_ext_mesh,ibool_interfaces_ext_mesh, &
+                                          my_neighbors_ext_mesh, &
+                                          request_send_vector_ext_mesh,request_recv_vector_ext_mesh)
+      call assemble_MPI_vector_async_recv(NPROC,NGLOB_AB,ssol%force_ext, &
+                                          buffer_recv_vector_ext_mesh,num_interfaces_ext_mesh, &
+                                          max_nibool_interfaces_ext_mesh, &
+                                          nibool_interfaces_ext_mesh,ibool_interfaces_ext_mesh, &
+                                          request_send_vector_ext_mesh,request_recv_vector_ext_mesh, &
+                                          my_neighbors_ext_mesh)
+    endif
 
     ! free tomo arrays
     if (allocated(tomo_x)) then 
       deallocate(tomo_x, tomo_y, tomo_z, tomo_force)
-    end if
+      deallocate(elem_force)
+    endif
 
   end subroutine read_ext_force
 
@@ -363,7 +447,7 @@ module static_module
 
     if(ssol%SAVE_STATIC_FIELD) then 
       call save_static_field_bin()
-    end if
+    endif
 
     ! save results on recievers 
     call save_field_at_receivers()
@@ -488,15 +572,15 @@ module static_module
             temp(i,j,k) = ssol%stress(i,j,k,ispec,icomp-3)
           else 
             temp(i,j,k) = ssol%strain(i,j,k,ispec,icomp-9)
-          end if
+          endif
 
           ! add interpolation weights
           temp(i,j,k) = temp(i,j,k) * hxir(i) * hetar(j) * hgammar(k)
         enddo; enddo; enddo
 
         seismo_static(icomp,irloc) = real(sum(temp), kind=CUSTOM_REAL)
-      end do
-    end do
+      enddo
+    enddo
 
     ! write to file on each rank 
     sisname = 'static.sem'
@@ -507,18 +591,18 @@ module static_module
           open(unit=40,file=trim(filename),status='replace',form='formatted')
         else 
           open(unit=40,file=trim(filename),status='old',form='formatted',position='append')
-        end if
+        endif
 
         do irloc = 1,nrec_local
           ir = number_receiver_global(irloc)
           write(40,12313) station_name(ir),network_name(ir), &
                            seismo_static(:,irloc)
-        end do
+        enddo
         close(40)
         
       endif 
       call synchronize_all()
-    end do
+    enddo
     call synchronize_all()
 
 12313 format(2(a,1x),15(g0,1x))
@@ -527,6 +611,224 @@ module static_module
     deallocate(seismo_static)
     
   end subroutine save_field_at_receivers
+
+  !> main subroutine for static solution using PETSc, this will be called when ssol%execute() is called, which is set to solve_static_problem_petsc in the type definition of static_solver_class, the actual
+  subroutine solve_static_problem_petsc(this)
+    use constants, only: CUSTOM_REAL,NGLLX,NGLLY,NGLLZ,NDIM, NGLLSQUARE
+    use specfem_par, only: NSPEC_AB,ibool,NGLOB_AB,myrank 
+    use specfem_par_elastic, only : ispec_is_elastic,displ 
+
+    use specfem_par, only: fixed_bdry_ijk, fixed_bdry_ispec,num_fixed_bdry_faces
+    use specfem_par, only: num_roller_bdry_faces,roller_bdry_ijk, &
+                            roller_bdry_ispec, roller_bdry_normal
+
+    use petsc_interfaces, only: fill_mat_petsc, assemble_petsc
+    use petsc_interfaces,only: solve_petsc,extract_petsc
+
+    implicit none
+
+    integer,parameter :: NGLL3 = NGLLX*NGLLY*NGLLZ
+    class(static_solver_class), intent(inout) :: this
+
+
+    real(kind=dp), allocatable :: Kloc(:,:,:,:)
+    integer :: ibool0_loc(NGLLX,NGLLY,NGLLZ), ispec
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: ux,uy,uz 
+    integer :: i, j, k, p, q, r, node_in, node_out
+    integer :: ib,dim_in, dim_out, iface,igll2 
+    real(kind=CUSTOM_REAL) :: force_x(NGLLX, NGLLY, NGLLZ), stress_loc(NGLLX, NGLLY, NGLLZ, 6)
+    real(kind=CUSTOM_REAL) :: force_y(NGLLX, NGLLY, NGLLZ), strain_loc(NGLLX, NGLLY, NGLLZ, 6)
+    real(kind=CUSTOM_REAL) :: force_z(NGLLX, NGLLY, NGLLZ)
+    real(kind=dp) :: Pmat(NDIM,NDIM), norm_vec(NDIM), Ktemp(NDIM,NDIM)
+    real(kind=dp), allocatable :: displ_dp(:,:)
+    real(kind=CUSTOM_REAL), allocatable :: kdotu(:,:)
+
+    ! boundary arrays
+    integer,allocatable :: fixed_bdry_faces(:,:), roller_bdry_faces(:,:)
+
+    ! allocate space 
+    allocate(Kloc(NDIM,NGLL3,NDIM,NGLL3), &
+            displ_dp(NDIM,NGLOB_AB), kdotu(NDIM,NGLOB_AB),&
+            fixed_bdry_faces(6,NSPEC_AB), &
+            roller_bdry_faces(6,NSPEC_AB))
+
+    ! init boundary arrays
+    fixed_bdry_faces(:,:) = 0
+    roller_bdry_faces(:,:) = 0
+    do i = 1, num_fixed_bdry_faces
+      ispec = fixed_bdry_ispec(i)
+      do j=1,6
+        if(fixed_bdry_faces(j, ispec) == 0) then 
+          fixed_bdry_faces(j,ispec) = i ! mark the element with fixed boundary condition
+          exit 
+        endif
+      enddo
+    enddo
+    do i = 1, num_roller_bdry_faces
+      ispec = roller_bdry_ispec(i)
+      do j=1,6
+        if(roller_bdry_faces(j, ispec) == 0) then 
+          roller_bdry_faces(j,ispec) = i ! mark the element with roller boundary condition
+          exit 
+        endif
+      enddo
+    enddo
+
+    if(myrank == 0) then 
+      write(*,*) 
+      write(*,*) '--------------------------------------------------'
+      write(*,*) 'element-wise computation of stiffness matrix K ...'
+      write(*,*) '--------------------------------------------------'
+    endif
+
+    do ispec = 1, NSPEC_AB
+      if(.not. ispec_is_elastic(ispec)) cycle
+      ibool0_loc(:,:,:) = ibool(:,:,:,ispec) - 1 ! convert to 0-based indexing for C
+
+      ! compute kloc
+      kloc(:,:,:,:) = 0.0_dp
+      ux(:,:,:) = 0.0_CUSTOM_REAL; uy(:,:,:) = 0.0_CUSTOM_REAL; uz(:,:,:) = 0.0_CUSTOM_REAL
+      do r=1,NGLLZ; do q=1,NGLLY; do p=1,NGLLX
+        node_in = (r-1)*NGLLY*NGLLX + (q-1)*NGLLX + p
+
+        ! loop over each direction 
+        do dim_in = 1,NDIM 
+          ! apply unit displacement in dim_in direction at node_in
+          if (dim_in == 1) then 
+            ux(p,q,r) = 1.0_CUSTOM_REAL
+          else if (dim_in == 2) then
+            uy(p,q,r) = 1.0_CUSTOM_REAL
+          else
+            uz(p,q,r) = 1.0_CUSTOM_REAL
+          endif
+
+          ! compute force response at all nodes, store in force_x/y/z
+          call compute_elemwise_Kxu(ispec, ux, uy, uz, &
+                                    force_x, force_y, force_z,&
+                                    .false., .false.,&
+                                    stress_loc, strain_loc)
+          ! fill kloc based on force response
+          do k=1,NGLLZ; do j=1,NGLLY; do i=1,NGLLX
+            node_out = (k-1)*NGLLY*NGLLX + (j-1)*NGLLX + i
+
+            kloc(1,node_out,dim_in,node_in) = force_x(i,j,k)
+            kloc(2,node_out,dim_in,node_in) = force_y(i,j,k)
+            kloc(3,node_out,dim_in,node_in) = force_z(i,j,k)
+          enddo; enddo; enddo
+
+          ! reset ux/uy/uz for next iteration
+          ux(p,q,r) = 0.0_CUSTOM_REAL
+          uy(p,q,r) = 0.0_CUSTOM_REAL
+          uz(p,q,r) = 0.0_CUSTOM_REAL
+        enddo ! dim_in 
+        
+      enddo; enddo; enddo
+
+      ! apply boundary conditions to kloc, for fixed boundary condition, we can simply zero out the corresponding rows and columns in kloc,
+      ! and set the diagonal entry to 1, for roller boundary condition, we need to remove the normal component of the force response, 
+      ! which is equivalent to zeroing out the entries in kloc that correspond to the normal direction 
+      !DEBUG
+      do ib = 1,6
+      !do ib = 1,0 ! do nothing --- IGNORE ---
+        iface = fixed_bdry_faces(ib,ispec)
+        if(iface == 0) cycle ! no more fixed boundary condition for this element
+        do igll2 = 1, NGLLSQUARE
+          i = fixed_bdry_ijk(1,igll2,iface)
+          j = fixed_bdry_ijk(2,igll2,iface)
+          k = fixed_bdry_ijk(3,igll2,iface)
+          node_out = (k-1)*NGLLY*NGLLX + (j-1)*NGLLX + i
+
+          ! zero out rows and columns in kloc
+          kloc(:,node_out,:,:)= 0.0_dp
+          kloc(:,:,:,node_out) = 0.0_dp
+
+          ! set diagonal entry to 1
+          kloc(1,node_out,1,node_out) = 1.0_dp
+          kloc(2,node_out,2,node_out) = 1.0_dp
+          kloc(3,node_out,3,node_out) = 1.0_dp
+        enddo
+      enddo
+
+      ! ROLLER BOUNDARY CONDITION
+      do ib = 1,6
+        iface = roller_bdry_faces(ib,ispec)
+        if(iface == 0) cycle ! no more roller boundary condition for this element
+        do igll2 = 1, NGLLSQUARE
+          i = roller_bdry_ijk(1,igll2,iface)
+          j = roller_bdry_ijk(2,igll2,iface)
+          k = roller_bdry_ijk(3,igll2,iface)
+          node_out = (k-1)*NGLLY*NGLLX + (j-1)*NGLLX + i
+
+          ! copy normal vector for this node
+          norm_vec(:) = roller_bdry_normal(:,igll2,iface)
+          Pmat = 0.0_dp
+          do dim_in = 1,NDIM
+            Pmat(dim_in,dim_in) = 1.0_dp
+            do dim_out = 1,NDIM
+              Pmat(dim_out,dim_in) = Pmat(dim_out,dim_in) - norm_vec(dim_out) * norm_vec(dim_in)
+            enddo
+          enddo
+
+          ! project K_row to Pmat * K 
+          do node_in = 1,NGLL3 
+            Ktemp(:,:) = Kloc(:,node_out,:,node_in)
+            Kloc(:,node_out,:,node_in) = matmul(Pmat, Ktemp)
+          enddo 
+
+          ! K_col
+          do node_in = 1,NGLL3 
+            Ktemp(:,:) = Kloc(:,node_in,:,node_out)
+            Kloc(:,node_in,:,node_out) = matmul(Ktemp, Pmat)
+          enddo
+
+          ! handle null space
+          do dim_in = 1,NDIM
+            do dim_out = 1,NDIM
+              Kloc(dim_out,node_out,dim_in,node_out) = Kloc(dim_out,node_out,dim_in,node_out) + norm_vec(dim_out) * norm_vec(dim_in)
+            enddo
+          enddo
+
+        enddo ! igll2
+      enddo
+
+      ! assemble into global matrix in PETSc
+      call fill_mat_petsc(this%petcs_ptr, ibool0_loc, Kloc)
+    enddo
+
+    if(myrank == 0) then 
+      write(*,*) 
+      write(*,*) '----------------------------------------'
+      write(*,*) 'global assembly ...'
+      write(*,*) '----------------------------------------'
+    endif
+
+    ! assemble global matrix in PETSc
+    call assemble_petsc(this%petcs_ptr)
+
+    call synchronize_all();
+
+    if(myrank == 0) then 
+      write(*,*) 
+      write(*,*) '----------------------------------------'
+      write(*,*) 'run linear solver ...'
+      write(*,*) '----------------------------------------'
+    endif
+
+    ! solve the linear system using PETSc
+    call solve_petsc(this%petcs_ptr)
+
+    ! copy results to displ_dp for later use, note that PETSc uses 0-based indexing while Fortran uses 1-based indexing, so we need to add 1 to the indices when copying
+    call extract_petsc(this%petcs_ptr, displ_dp)
+
+    displ(:,:) = real(displ_dp(:,:), kind=CUSTOM_REAL)
+
+    ! compute stress and strain based on the solution, and store in ssol%stress and ssol%strain for later use
+    call compute_forces_static(displ,.false., kdotu, ssol%stress, ssol%strain)
+
+    ! free allocated arrays
+    deallocate(Kloc, displ_dp, kdotu, fixed_bdry_faces, roller_bdry_faces)
+    
+  end subroutine solve_static_problem_petsc
 
   !> main subroutine for static solution, CG metho is used
   subroutine static_problem_impl()
@@ -543,6 +845,11 @@ module static_module
     ! Added 'z' for the preconditioned residual
     real(kind=dp), dimension(:, :), allocatable :: r, p, Ap, z, inv_pred, u 
     real(kind=CUSTOM_REAL),dimension(:,:), allocatable :: p_cr, Ap_cr, z_cr,kdotu
+
+    if(ssol%USE_PETSC_AS_BACKEND) then 
+      call ssol%execute() ! call PETSc backend solver
+      return 
+    endif
     
     allocate(kdotu(NDIM,NGLOB_AB), r(NDIM,NGLOB_AB), p(NDIM,NGLOB_AB), &
              Ap(NDIM,NGLOB_AB), z(NDIM,NGLOB_AB),inv_pred(NDIM,NGLOB_AB))
@@ -572,7 +879,7 @@ module static_module
       write(*,*) 'Initial residual norm: ', sqrt(rsinit)
       write(*,*) '----------------------------------------'
       write(*,*)
-    end if
+    endif
     
     ! Safety for division by zero if exact solution is 0
     if (rsinit < 1.0e-20) rsinit = 1.0
@@ -767,18 +1074,8 @@ module static_module
   subroutine compute_forces_phase(displ,iphase,is_nonlinear,kdotu,stress_tensor,strain_tensor)
     use constants, only: CUSTOM_REAL,NGLLX,NGLLY,NGLLZ,NDIM,&
                         N_SLS,ONE_THIRD,FOUR_THIRDS,m1,m2
-    use specfem_par, only: xixstore,xiystore,xizstore,etaxstore,etaystore,etazstore, &
-                          gammaxstore,gammaystore,gammazstore,jacobianstore, &
-                          NGLOB_AB, rhostore,&
-                          hprime_xx,hprime_xxT, &
-                          hprimewgll_xx,hprimewgll_xxT, &
-                          kappastore,mustore,ibool,ANISOTROPY,ROTATION
-    use specfem_par, only: wgllwgll_xy_3D,wgllwgll_xz_3D,wgllwgll_yz_3D,wxgll,wygll,wzgll
-    use specfem_par_elastic, only: c11store,c12store,c13store,c14store,c15store,c16store, &
-                                  c22store,c23store,c24store,c25store,c26store,c33store, &
-                                  c34store,c35store,c36store,c44store,c45store,c46store, &
-                                  c55store,c56store,c66store,&
-                                  nspec_inner_elastic,nspec_outer_elastic,phase_ispec_inner_elastic
+    use specfem_par, only: NGLOB_AB, ibool
+    use specfem_par_elastic, only: nspec_inner_elastic,nspec_outer_elastic,phase_ispec_inner_elastic
 
     implicit none
     
@@ -792,25 +1089,8 @@ module static_module
     integer :: num_elements
     integer :: ispec, i,j,k,iglob, ispec_p
     real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: dummyx_loc,dummyy_loc,dummyz_loc
-    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: tempx1,tempy1,tempz1
-    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: tempx2,tempy2,tempz2
-    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: tempx3,tempy3,tempz3
-    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: duxdxl,duxdyl,duxdzl
-    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: duydxl,duydyl,duydzl
-    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: duzdxl,duzdyl,duzdzl
-    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: newtempx1,newtempy1,newtempz1
-    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: newtempx2,newtempy2,newtempz2
-    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: newtempx3,newtempy3,newtempz3
-    real(kind=CUSTOM_REAL) :: xixl,xiyl,xizl,etaxl,etayl,etazl,gammaxl,gammayl,gammazl,jacobianl
-    real(kind=CUSTOM_REAL) :: duxdyl_plus_duydxl,duzdxl_plus_duxdzl,duzdyl_plus_duydzl
-    real(kind=CUSTOM_REAL) :: sigma_xx,sigma_yy,sigma_zz,sigma_xy,sigma_xz,sigma_yz,sigma_yx,sigma_zx,sigma_zy
-
-    ! local material parameters
-    real(kind=CUSTOM_REAL) :: c11,c12,c13,c14,c15,c16,c22,c23,c24,c25,c26, &
-                              c33,c34,c35,c36,c44,c45,c46,c55,c56,c66
-    real(kind=CUSTOM_REAL) :: lambdal,mul,lambdalplus2mul
-    real(kind=CUSTOM_REAL) :: kappal,fac1,fac2,fac3
-    real(kind=CUSTOM_REAL) :: strain_xx,strain_yy,strain_zz,strain_xy,strain_xz,strain_yz
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: force_x,force_y,force_z
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ,6) :: stress_loc,strain_loc
 
     ! choses inner/outer elements
     if (iphase == 1) then
@@ -834,7 +1114,76 @@ module static_module
         enddo
       enddo
 
-      ! compute gradient
+      ! compute local forces and stress/strain
+      call compute_elemwise_Kxu(ispec,dummyx_loc,dummyy_loc,dummyz_loc, &
+                                force_x,force_y,force_z, &
+                                is_nonlinear, .true.,&
+                                stress_loc,strain_loc)
+
+      ! scatter local forces to global kdotu
+      do k = 1,NGLLZ; do j = 1,NGLLY; do i = 1,NGLLX
+        iglob = ibool(i,j,k,ispec)
+        kdotu(1,iglob) = kdotu(1,iglob) + force_x(i,j,k)
+        kdotu(2,iglob) = kdotu(2,iglob) + force_y(i,j,k)
+        kdotu(3,iglob) = kdotu(3,iglob) + force_z(i,j,k)
+
+        ! save stress and strain tensor
+        stress_tensor(i,j,k,ispec,:) = stress_loc(i,j,k,:)
+        strain_tensor(i,j,k,ispec,:) = strain_loc(i,j,k,:)
+      enddo; enddo; enddo;
+
+    enddo ! ispec_p
+  end subroutine compute_forces_phase
+
+  subroutine compute_elemwise_Kxu(ispec,dummyx_loc,dummyy_loc,dummyz_loc,&
+                                        force_x,force_y,force_z,&
+                                        is_nonlinear,compute_stress_and_strain,&
+                                        stress_loc,strain_loc)
+    use constants, only: CUSTOM_REAL,NGLLX,NGLLY,NGLLZ,NDIM,&
+                        N_SLS,ONE_THIRD,FOUR_THIRDS,m1,m2
+    use specfem_par, only: xixstore,xiystore,xizstore,etaxstore,etaystore,etazstore, &
+                          gammaxstore,gammaystore,gammazstore,jacobianstore, &
+                          rhostore,&
+                          hprime_xx,hprime_xxT, &
+                          hprimewgll_xx,hprimewgll_xxT, &
+                          kappastore,mustore,ANISOTROPY,ROTATION
+    use specfem_par, only: wgllwgll_xy_3D,wgllwgll_xz_3D,wgllwgll_yz_3D,wxgll,wygll,wzgll
+    use specfem_par_elastic, only: c11store,c12store,c13store,c14store,c15store,c16store, &
+                                  c22store,c23store,c24store,c25store,c26store,c33store, &
+                                  c34store,c35store,c36store,c44store,c45store,c46store, &
+                                  c55store,c56store,c66store
+
+    implicit none
+    integer, intent(in) :: ispec
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ), intent(in) :: dummyx_loc,dummyy_loc,dummyz_loc
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ), intent(out) :: force_x,force_y,force_z
+    real(kind=CUSTOM_REAL),dimension(NGLLX,NGLLY,NGLLZ,6), intent(out) :: stress_loc,strain_loc
+    logical, intent(in) :: is_nonlinear
+    logical, intent(in) :: compute_stress_and_strain
+
+    ! local 
+    integer :: i,j,k
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: tempx1,tempy1,tempz1
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: tempx2,tempy2,tempz2
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: tempx3,tempy3,tempz3
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: duxdxl,duxdyl,duxdzl
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: duydxl,duydyl,duydzl
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: duzdxl,duzdyl,duzdzl
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: newtempx1,newtempy1,newtempz1
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: newtempx2,newtempy2,newtempz2
+    real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: newtempx3,newtempy3,newtempz3
+    real(kind=CUSTOM_REAL) :: xixl,xiyl,xizl,etaxl,etayl,etazl,gammaxl,gammayl,gammazl,jacobianl
+    real(kind=CUSTOM_REAL) :: duxdyl_plus_duydxl,duzdxl_plus_duxdzl,duzdyl_plus_duydzl
+    real(kind=CUSTOM_REAL) :: sigma_xx,sigma_yy,sigma_zz,sigma_xy,sigma_xz,sigma_yz,sigma_yx,sigma_zx,sigma_zy
+
+    ! local material parameters
+    real(kind=CUSTOM_REAL) :: c11,c12,c13,c14,c15,c16,c22,c23,c24,c25,c26, &
+                              c33,c34,c35,c36,c44,c45,c46,c55,c56,c66
+    real(kind=CUSTOM_REAL) :: lambdal,mul,lambdalplus2mul
+    real(kind=CUSTOM_REAL) :: kappal,fac1,fac2,fac3
+    real(kind=CUSTOM_REAL) :: strain_xx,strain_yy,strain_zz,strain_xy,strain_xz,strain_yz
+
+     ! compute gradient
       call mxm5_3comp_singleA(hprime_xx,m1,dummyx_loc,dummyy_loc,dummyz_loc,tempx1,tempy1,tempz1,m2)
       call mxm5_3comp_3dmat_single(dummyx_loc,dummyy_loc,dummyz_loc,m1,hprime_xxT,m1,tempx2,tempy2,tempz2,m1)
       call mxm5_3comp_singleB(dummyx_loc,dummyy_loc,dummyz_loc,m2,hprime_xxT,tempx3,tempy3,tempz3,m1)
@@ -901,12 +1250,14 @@ module static_module
         endif
 
         ! save strain/Green strain tensor, voigt notation
-        strain_tensor(i,j,k,ispec,1) = strain_xx
-        strain_tensor(i,j,k,ispec,2) = strain_yy
-        strain_tensor(i,j,k,ispec,3) = strain_zz
-        strain_tensor(i,j,k,ispec,4) = strain_yz
-        strain_tensor(i,j,k,ispec,5) = strain_xz
-        strain_tensor(i,j,k,ispec,6) = strain_xy
+        if(compute_stress_and_strain) then 
+          strain_loc(i,j,k,1) = strain_xx
+          strain_loc(i,j,k,2) = strain_yy
+          strain_loc(i,j,k,3) = strain_zz
+          strain_loc(i,j,k,4) = strain_yz
+          strain_loc(i,j,k,5) = strain_xz
+          strain_loc(i,j,k,6) = strain_xy
+        endif
 
         ! precompute some sums to save CPU time
         duxdyl_plus_duydxl = 2.0_CUSTOM_REAL * strain_xy
@@ -971,12 +1322,14 @@ module static_module
 
         ! note stress is the second Piola-Kirchhoff stress if is_nonlinear is true
         ! save stress tensor,voigt notation
-        stress_tensor(i,j,k,ispec,1) = sigma_xx
-        stress_tensor(i,j,k,ispec,2) = sigma_yy
-        stress_tensor(i,j,k,ispec,3) = sigma_zz
-        stress_tensor(i,j,k,ispec,4) = sigma_yz
-        stress_tensor(i,j,k,ispec,5) = sigma_xz
-        stress_tensor(i,j,k,ispec,6) = sigma_xy
+        if(compute_stress_and_strain) then 
+           stress_loc(i,j,k,1) = sigma_xx
+           stress_loc(i,j,k,2) = sigma_yy
+           stress_loc(i,j,k,3) = sigma_zz
+           stress_loc(i,j,k,4) = sigma_yz
+           stress_loc(i,j,k,5) = sigma_xz
+           stress_loc(i,j,k,6) = sigma_xy
+        endif
 
         ! symmetric stresses
         sigma_yx = sigma_xy
@@ -1027,7 +1380,6 @@ module static_module
 
       ! scatter local forces to global force vector
       do k = 1,NGLLZ;do j = 1,NGLLY; do i = 1,NGLLX
-        iglob = ibool(i,j,k,ispec)
 
         ! compute rotational forces if needed
         if(ROTATION) then  
@@ -1049,7 +1401,7 @@ module static_module
           c11 = 0.0_CUSTOM_REAL
           c22 = 0.0_CUSTOM_REAL
           c33 = 0.0_CUSTOM_REAL    
-        end if
+        endif
 
         fac1 = wgllwgll_yz_3D(i,j,k) !or wgllwgll_yz(j,k)
         fac2 = wgllwgll_xz_3D(i,j,k) !or wgllwgll_xz(i,k)
@@ -1063,13 +1415,11 @@ module static_module
         ! c22 = -c22
         ! c33 = -c33
 
-        kdotu(1,iglob) = kdotu(1,iglob) + c11
-        kdotu(2,iglob) = kdotu(2,iglob) + c22
-        kdotu(3,iglob) = kdotu(3,iglob) + c33
+        force_x(i,j,k) = c11
+        force_y(i,j,k) = c22
+        force_z(i,j,k) = c33
       enddo; enddo; enddo
-
-    enddo ! ispec_p
-  end subroutine compute_forces_phase
+  end subroutine compute_elemwise_Kxu
 
   subroutine finalize_static_module
     implicit none
@@ -1079,6 +1429,9 @@ module static_module
     if (allocated(ssol%force_ext)) deallocate(ssol%force_ext)
     if (allocated(ssol%stress)) deallocate(ssol%stress)
     if (allocated(ssol%strain)) deallocate(ssol%strain)
+
+    ! free petsc objects
+    call ssol%free_petsc()
 
   end subroutine finalize_static_module
 
@@ -1146,7 +1499,7 @@ module static_module
         vec(:,iglob) = vec(:,iglob) - dot_product(vec(:,iglob),normal_vec)*normal_vec
         mask_nodes(iglob) = .true.
       enddo
-    end do 
+    enddo 
 
   end subroutine enforce_roller_bc
 
@@ -1172,7 +1525,7 @@ module static_module
 
         vec(:,iglob) = 0.0_dp
       enddo
-    end do
+    enddo
 
   end subroutine enforce_fixed_bc
 
@@ -1188,5 +1541,55 @@ module static_module
     z3 = x1 * y2 - x2 * y1
 
   end subroutine cross_product
+
+  subroutine create_petsc_backend(this)
+    use constants, only: NGLLX,NGLLY,NGLLZ,NDIM
+    use specfem_par, only: nglob => NGLOB_AB, nspec => NSPEC_AB, myrank, ibool
+    use specfem_par, only: num_interfaces_ext_mesh, max_nibool_interfaces_ext_mesh, &
+                          nibool_interfaces_ext_mesh, ibool_interfaces_ext_mesh, &
+                          my_neighbors_ext_mesh,xstore,ystore,zstore
+    use petsc_interfaces
+
+    implicit none
+
+    integer, parameter :: NGLL3 = NGLLX*NGLLY*NGLLZ
+    class(static_solver_class), intent(inout) :: this
+
+    if(.not. this%USE_PETSC_AS_BACKEND) return
+
+    ! allocate owner ranks
+    allocate(this%owner_rank(nglob))
+
+    ! set initial value
+    this%owner_rank(:) = myrank
+
+    ! build ownership metadata and create the PETSc backend context
+    call setup_petsc(this%petcs_ptr, nglob, myrank, &
+                     nspec, NGLL3, NDIM, &
+                     num_interfaces_ext_mesh, &
+                     nibool_interfaces_ext_mesh, &
+                     ibool_interfaces_ext_mesh, &
+                     max_nibool_interfaces_ext_mesh, &
+                     my_neighbors_ext_mesh, &
+                     xstore, ystore, zstore, &
+                     ibool, this%owner_rank)
+
+  end subroutine create_petsc_backend
+
+  subroutine destroy_petsc_backend(this)
+    use petsc_interfaces
+    implicit none
+
+    class(static_solver_class), intent(inout) :: this
+
+    if(.not. this%USE_PETSC_AS_BACKEND) return
+
+    ! destroy PETSc solver context
+    call cleanup_petsc(this%petcs_ptr)
+
+    ! deallocate owner ranks
+    if (allocated(this%owner_rank)) deallocate(this%owner_rank)
+
+  end subroutine destroy_petsc_backend
 
 end module static_module

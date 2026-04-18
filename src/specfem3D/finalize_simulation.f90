@@ -162,6 +162,7 @@
     deallocate(rmassx)
     deallocate(rmassy)
     deallocate(rmassz)
+    if (allocated(rmass)) deallocate(rmass)
   endif
   if (ACOUSTIC_SIMULATION) then
     deallocate(rmass_acoustic)

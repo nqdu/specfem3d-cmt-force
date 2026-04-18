@@ -29,6 +29,16 @@
 S := ${S_TOP}/src/static
 $(static3D_OBJECTS): S = ${S_TOP}/src/static
 
+ifneq ($(filter 1 yes YES true TRUE on ON,$(WITH_PETSC)),)
+static3D_PETSC_OBJECT = $O/petsc_routines.static_c.o
+static3D_EXTRA_LIBS = $(PETSCLIBS)
+static3D_CPPFLAGS = $(FC_DEFINE)WITH_PETSC
+else
+static3D_PETSC_OBJECT = $O/petsc_routines_stubs.static_c.o
+static3D_EXTRA_LIBS =
+static3D_CPPFLAGS =
+endif
+
 #######################################
 
 ####
@@ -40,14 +50,17 @@ static3D_TARGETS = \
 	$(EMPTY_MACRO)
 
 static3D_OBJECTS = \
+	$O/petsc_interfaces.static_module.o \
 	$O/static_module.static_module.o \
 	$O/xstatic3D.static.o \
+	$(static3D_PETSC_OBJECT) \
 	$(EMPTY_MACRO)
 
 # specfem3D objects without the main program entry point
 static3D_SPECFEM_OBJECTS = $(filter-out $O/specfem3D.spec.o, $(specfem3D_OBJECTS))
 
 static3D_MODULES = \
+	$(FC_MODDIR)/petsc_interfaces.$(FC_MODEXT) \
 	$(FC_MODDIR)/static_module.$(FC_MODEXT) \
 	$(EMPTY_MACRO)
 
@@ -64,7 +77,7 @@ $E/xstatic3D: $(static3D_OBJECTS) $(static3D_SPECFEM_OBJECTS) $(specfem3D_SHARED
 	@echo ""
 	@echo "building xstatic3D"
 	@echo ""
-	${FCLINK} -o $@ $(static3D_OBJECTS) $(static3D_SPECFEM_OBJECTS) $(specfem3D_SHARED_OBJECTS) $(MPILIBS) $(VTKLIBS) $(SPECFEM_LINK_FLAGS)
+	${FCLINK} -o $@ $(static3D_OBJECTS) $(static3D_SPECFEM_OBJECTS) $(specfem3D_SHARED_OBJECTS) $(MPILIBS) $(VTKLIBS) $(static3D_EXTRA_LIBS) $(SPECFEM_LINK_FLAGS)
 	@echo ""
 
 #######################################
@@ -73,10 +86,24 @@ $E/xstatic3D: $(static3D_OBJECTS) $(static3D_SPECFEM_OBJECTS) $(specfem3D_SHARED
 #### rule to build each .o file below
 ####
 
+$O/static_module.static_module.o: $O/petsc_interfaces.static_module.o
+
+$O/petsc_interfaces.static_module.o: $S/petsc_interfaces.f90
+	${FCCOMPILE_CHECK} ${FCFLAGS_f90} -c -o $@ $<
+
 ## module file: depends on specfem3D_par and pml_par modules
 $O/%.static_module.o: $S/%.f90 $O/specfem3D_par.spec_module.o $O/pml_par.spec_module.o
 	${FCCOMPILE_CHECK} ${FCFLAGS_f90} -c -o $@ $<
 
 ## main program: depends on static_module and specfem3D_par module
 $O/%.static.o: $S/%.f90 $O/static_module.static_module.o $O/specfem3D_par.spec_module.o
-	${FCCOMPILE_CHECK} ${FCFLAGS_f90} -c -o $@ $<
+	${FCCOMPILE_CHECK} ${FCFLAGS_f90} $(static3D_CPPFLAGS) -c -o $@ $<
+
+$O/%.static.o: $S/%.F90 $O/static_module.static_module.o $O/specfem3D_par.spec_module.o
+	${FCCOMPILE_CHECK} ${FCFLAGS_f90} $(static3D_CPPFLAGS) -c -o $@ $<
+
+$O/petsc_routines.static_c.o: $S/petsc_routines.c ${SETUP}/config.h
+	${CC} -c $(CPPFLAGS) $(CFLAGS) $(MPI_INCLUDES) -o $@ $<
+
+$O/petsc_routines_stubs.static_c.o: $S/petsc_routines_stubs.c ${SETUP}/config.h
+	${CC} -c $(CPPFLAGS) $(CFLAGS) $(MPI_INCLUDES) -o $@ $<
