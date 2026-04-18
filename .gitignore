@@ -26,6 +26,8 @@ src/specfem3D/*.mod
 *__genmod.f90
 my_mpi.mod
 
+build/
+
 # documentation
 manual_SPECFEM3D_Cartesian.aux
 manual_SPECFEM3D_Cartesian.bbl
