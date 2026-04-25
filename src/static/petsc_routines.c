@@ -582,32 +582,76 @@ setup_petsc_impl(PetscFemCtx *ctx, const int *ibool)
     create_preallocation_nnz(ctx, l2g_indices, rstart, rend, node_adj_ptr, node_adj_data, &d_nnz, &o_nnz);
 
     // =========================================================================
-    // 6. Create PETSc Objects
+    // 6. Create PETSc Objects (Matrix)
     // =========================================================================
     PetscInt local_dofs = local_owned * ctx->NDIM;
 
     PetscCallVoid(MatCreate(PETSC_COMM_WORLD, &ctx->K_mat));
-    PetscCallVoid(MatSetType(ctx->K_mat, MATMPIBAIJ));
     PetscCallVoid(MatSetSizes(ctx->K_mat, local_dofs, local_dofs, PETSC_DETERMINE, PETSC_DETERMINE));
     PetscCallVoid(MatSetBlockSize(ctx->K_mat, ctx->NDIM));
-    PetscCallVoid(MatMPIBAIJSetPreallocation(ctx->K_mat, ctx->NDIM, 0, d_nnz, 0, o_nnz));
+
+    // Set default type, but intercept command line flags (e.g., -mat_type aijcusparse)
+    PetscCallVoid(MatSetType(ctx->K_mat, MATMPIBAIJ));
+    PetscCallVoid(MatSetFromOptions(ctx->K_mat));
+
+    // Check the final matrix type to apply the correct preallocation routine
+    PetscBool is_baij;
+    PetscCallVoid(PetscObjectTypeCompare((PetscObject)ctx->K_mat, MATMPIBAIJ, &is_baij));
+
+    if (is_baij) {
+        // Original behavior: Block preallocation
+        PetscCallVoid(MatMPIBAIJSetPreallocation(ctx->K_mat, ctx->NDIM, 0, d_nnz, 0, o_nnz));
+    } else {
+        // CUDA/AIJ behavior: Convert block arrays to scalar arrays
+        PetscInt *d_nnz_aij, *o_nnz_aij;
+        PetscCallVoid(PetscMalloc2(local_dofs, &d_nnz_aij, local_dofs, &o_nnz_aij));
+        
+        for (PetscInt i = 0; i < local_owned; i++) {
+            for (PetscInt j = 0; j < ctx->NDIM; j++) {
+                PetscInt scalar_row = i * ctx->NDIM + j;
+                d_nnz_aij[scalar_row] = d_nnz[i] * ctx->NDIM;
+                o_nnz_aij[scalar_row] = o_nnz[i] * ctx->NDIM;
+            }
+        }
+        
+        PetscCallVoid(MatMPIAIJSetPreallocation(ctx->K_mat, 0, d_nnz_aij, 0, o_nnz_aij));
+        PetscCallVoid(MatSeqAIJSetPreallocation(ctx->K_mat, 0, d_nnz_aij));
+        PetscCallVoid(PetscFree2(d_nnz_aij, o_nnz_aij));
+    }
 
     ISLocalToGlobalMapping l2g_mapping;
     PetscCallVoid(ISLocalToGlobalMappingCreate(PETSC_COMM_WORLD, ctx->NDIM, ctx->nglob, 
                                                l2g_indices, PETSC_COPY_VALUES, &l2g_mapping));
     PetscCallVoid(MatSetLocalToGlobalMapping(ctx->K_mat, l2g_mapping, l2g_mapping));
     
-    // 
-    PetscCallVoid(VecCreateMPI(PETSC_COMM_WORLD, local_dofs, PETSC_DETERMINE, &ctx->rhs_vec));
+    // =========================================================================
+    // Create PETSc Objects (Vectors)
+    // =========================================================================
+    
+    // Global RHS Vector
+    PetscCallVoid(VecCreate(PETSC_COMM_WORLD, &ctx->rhs_vec));
+    PetscCallVoid(VecSetSizes(ctx->rhs_vec, local_dofs, PETSC_DETERMINE));
     PetscCallVoid(VecSetBlockSize(ctx->rhs_vec, ctx->NDIM));
+    PetscCallVoid(VecSetType(ctx->rhs_vec, VECMPI));
+    PetscCallVoid(VecSetFromOptions(ctx->rhs_vec)); // Intercepts -vec_type cuda
+    PetscCallVoid(VecSetUp(ctx->rhs_vec));
+
     PetscCallVoid(VecSetLocalToGlobalMapping(ctx->rhs_vec, l2g_mapping));
+    
+    // Global Solution Vector (Inherits type from rhs_vec)
     PetscCallVoid(VecDuplicate(ctx->rhs_vec, &ctx->sol_vec));
 
-    // local solution vector
-    PetscCallVoid(VecCreateSeq(PETSC_COMM_SELF, ctx->nglob * ctx->NDIM, &ctx->local_sol_vec));
+    // Local Solution Vector
+    PetscCallVoid(VecCreate(PETSC_COMM_SELF, &ctx->local_sol_vec));
+    PetscCallVoid(VecSetSizes(ctx->local_sol_vec, ctx->nglob * ctx->NDIM, PETSC_DETERMINE));
     PetscCallVoid(VecSetBlockSize(ctx->local_sol_vec, ctx->NDIM));
+    PetscCallVoid(VecSetType(ctx->local_sol_vec, VECSEQ));
+    PetscCallVoid(VecSetFromOptions(ctx->local_sol_vec)); // Ensures local vec matches type
+    PetscCallVoid(VecSetUp(ctx->local_sol_vec));
 
-    // scatter info
+    // =========================================================================
+    // Setup Scatters
+    // =========================================================================
     IS from_is, to_is;
     PetscCallVoid(ISCreateBlock(PETSC_COMM_SELF, ctx->NDIM, ctx->nglob, 
                                 l2g_indices, PETSC_COPY_VALUES, &from_is));
