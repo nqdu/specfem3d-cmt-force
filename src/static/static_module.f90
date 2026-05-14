@@ -22,7 +22,7 @@ module static_module
     real(kind=CUSTOM_REAL), dimension(:,:,:,:,:), allocatable :: stress,strain ! shape(NGLLX,NGLLY,NGLLZ,NSPEC,6)
   
     ! for PETSc parallel matrix assembly
-    logical :: USE_PETSC_AS_BACKEND = .true. ! whether to use PETSc as the linear solver backend, if false, a simple CG solver implemented in Fortran will be used, this is mainly for testing and debugging purposes
+    logical :: USE_PETSC_AS_BACKEND = .false. ! whether to use PETSc as the linear solver backend, if false, a simple CG solver implemented in Fortran will be used, this is mainly for testing and debugging purposes
     integer(kind=8) :: petcs_ptr ! dummy variable to hold PETSc pointers as integers, will be cast to proper types in C
     integer, dimension(:), allocatable :: owner_rank ! shape(NGLOB_AB), stores the owning rank for each global DOF, used for parallel assembly with PETSc
 
@@ -83,7 +83,7 @@ module static_module
       call read_value_logical(ssol%USE_PETSC_AS_BACKEND, "USE_PETSC_AS_BACKEND",ier)
       if (ier /= 0) then
         !print*, "no USE_PETSC_AS_BACKEND specified, default to true"
-        ssol%USE_PETSC_AS_BACKEND = .true.
+        ssol%USE_PETSC_AS_BACKEND = .false.
       endif
 
 
@@ -94,6 +94,7 @@ module static_module
     ! broadcast parameters to all ranks
     call bcast_all_singlel(ssol%SAVE_STATIC_FIELD)
     call bcast_all_singlel(ssol%is_nonlinear)
+    call bcast_all_singlel(ssol%USE_PETSC_AS_BACKEND)
 
   end subroutine read_params_static
 

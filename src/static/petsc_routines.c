@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <math.h>
+#include <assert.h>
+
 #include "config.h"
 
 /**
@@ -155,28 +157,88 @@ get_xyz_minmax(
 }
 
 /**
- * @brief Get the coordinate hash 
- * 
- * @param x X-coordinate.
- * @param y Y-coordinate.
- * @param z Z-coordinate.
- * @param minmax_xyz Array of min/max values [x_min, x_max, y_min, y_max, z_min, z_max].
- * @param min_dist Minimum distance between nodes.
- * @return uint64_t Hash value.
+ * @brief Compute a quantized spatial bin key for a 3D coordinate.
+ *
+ * Maps (x, y, z) to a 63-bit packed integer key by quantizing each coordinate
+ * onto a uniform grid spanning the global bounding box. Two ranks evaluating
+ * this function with bit-identical inputs produce bit-identical keys, which
+ * is required for ghost-node identification.
+ *
+ * The bin size is min_dist / 10, giving a 10x safety margin against
+ * floating-point noise relative to the minimum node spacing. For this to be
+ * robust, min_dist must be much larger than the relative floating-point
+ * error in the coordinates (typically ~1e-12 * domain_size for double).
+ *
+ * Each axis gets 21 bits, so each axis must have fewer than 2^21 = 2,097,152
+ * bins. Asserted at runtime.
+ *
+ * Preconditions:
+ *   - minmax_xyz is bit-identical across all ranks (use MPI_Allreduce on raw
+ *     coordinates, not on partial reductions).
+ *   - min_dist > 0 and the domain is non-degenerate on every axis.
+ *   - Compile without -ffast-math for this translation unit; reordered
+ *     floating-point arithmetic breaks cross-rank determinism.
+ *
+ * @param x,y,z       Coordinate to hash.
+ * @param minmax_xyz  [xmin, xmax, ymin, ymax, zmin, zmax], globally identical.
+ * @param min_dist    Minimum node spacing in the mesh.
+ * @return            Packed 63-bit key suitable for grouping coincident nodes.
  */
-static uint64_t 
-get_coordinate_hash(double x, double y, double z, const double *minmax_xyz, double min_dist)
+static uint64_t
+get_coordinate_hash(double x, double y, double z,
+                    const double *minmax_xyz, double min_dist)
 {
-    // quantize coordinates to a fixed precision grid based on global min/max and a predefined number of bins (e.g., 1 million)
-    uint64_t num_binsx = (minmax_xyz[1] - minmax_xyz[0]) / min_dist * 10; // 10x finer than minimum edge length
-    uint64_t num_binsy = (minmax_xyz[3] - minmax_xyz[2]) / min_dist * 10;
-    uint64_t num_binsz = (minmax_xyz[5] - minmax_xyz[4]) / min_dist * 10;
-    uint64_t x_bin = (uint64_t)((x - minmax_xyz[0]) / (minmax_xyz[1] - minmax_xyz[0]) * num_binsx);
-    uint64_t y_bin = (uint64_t)((y - minmax_xyz[2]) / (minmax_xyz[3] - minmax_xyz[2]) * num_binsy);
-    uint64_t z_bin = (uint64_t)((z - minmax_xyz[4]) / (minmax_xyz[5] - minmax_xyz[4]) * num_binsz);
+    enum { BITS_PER_AXIS = 21 };
+    const uint64_t MAX_BINS = UINT64_C(1) << BITS_PER_AXIS;  /* 2,097,152 */
 
-    uint64_t hash_val = (x_bin << 42) | (y_bin << 21) | z_bin; // pack into a single 64-bit integer
-    return hash_val;
+    const double xmin = minmax_xyz[0], xmax = minmax_xyz[1];
+    const double ymin = minmax_xyz[2], ymax = minmax_xyz[3];
+    const double zmin = minmax_xyz[4], zmax = minmax_xyz[5];
+
+    const double dx = xmax - xmin;
+    const double dy = ymax - ymin;
+    const double dz = zmax - zmin;
+
+    if(min_dist <= 0.0 || dx <= 0.0 || dy <= 0.0 || dz <= 0.0) {
+        fprintf(stderr, "Error: Invalid input to get_coordinate_hash: min_dist=%e, dx=%e, dy=%e, dz=%e\n", min_dist, dx, dy, dz);
+        fprintf(stderr, "Ensure that min_dist is positive and the domain is non-degenerate on all axes.\n");
+        exit(1);
+    }
+
+    /* Bin count per axis: 10x finer than min_dist, capped at 2^21 - 1. */
+    const double bin_size = min_dist / 10.0;
+    uint64_t nbx = (uint64_t)floor(dx / bin_size) + 1;
+    uint64_t nby = (uint64_t)floor(dy / bin_size) + 1;
+    uint64_t nbz = (uint64_t)floor(dz / bin_size) + 1;
+
+    if(nbx >= MAX_BINS || nby >= MAX_BINS || nbz >= MAX_BINS) {
+        fprintf(stderr, "Error: Bin count exceeds limit in get_coordinate_hash: nbx=%" PRIu64 ", nby=%" PRIu64 ", nbz=%" PRIu64 "\n", nbx, nby, nbz);
+        fprintf(stderr, "This can happen if min_dist is too small relative to the domain size. Consider increasing min_dist or using a 64-bit PETSc build with more bits for hashing.\n");
+        exit(1);
+    }
+
+    /* Quantize. llround() is symmetric round-half-to-even-free (round half
+     * away from zero), which is deterministic across IEEE-754 implementations.
+     * Critically, this rounds rather than truncates: two coordinates differing
+     * by 1 ULP near a bin boundary land in the same bin instead of opposite
+     * bins. */
+    int64_t xb = llround((x - xmin) / dx * (double)(nbx - 1));
+    int64_t yb = llround((y - ymin) / dy * (double)(nby - 1));
+    int64_t zb = llround((z - zmin) / dz * (double)(nbz - 1));
+
+    /* Clamp to handle coordinates slightly outside [min, max] due to
+     * floating-point error, or exactly at the upper boundary. */
+    if (xb < 0) xb = 0;
+    if (yb < 0) yb = 0;
+    if (zb < 0) zb = 0;
+    if ((uint64_t)xb >= nbx) xb = (int64_t)(nbx - 1);
+    if ((uint64_t)yb >= nby) yb = (int64_t)(nby - 1);
+    if ((uint64_t)zb >= nbz) zb = (int64_t)(nbz - 1);
+
+    /* Pack into 63 bits: [zeros | xb (21) | yb (21) | zb (21)]. */
+    return ((uint64_t)xb << (2 * BITS_PER_AXIS))
+         | ((uint64_t)yb <<      BITS_PER_AXIS)
+         |  (uint64_t)zb;
 }
 
 /** @brief Cast the opaque @c long handle back to a typed pointer. */
