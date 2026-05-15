@@ -708,6 +708,7 @@ typedef struct mesh_ {
   int* d_updated_dof_ocean_load;
 
   // rotation-aware elastic inverse mass
+  int ROTATION;
   realw* d_rmass;
 
   // C-PML

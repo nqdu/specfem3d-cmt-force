@@ -140,7 +140,7 @@
     endif
 
     call prepare_fields_elastic_device(Mesh_pointer, &
-                                       rmass,rmassx,rmassy,rmassz, &
+                                       rmassx,rmassy,rmassz, &
                                        rho_vp,rho_vs, &
                                        kappastore, mustore, &
                                        num_phase_ispec_elastic,phase_ispec_inner_elastic, &
@@ -240,19 +240,24 @@
   endif ! NOISE_TOMOGRAPHY
 
   ! prepares gravity-related arrays and shared integration weights
-  if (GRAVITY .or. ROTATION) then
+  if (GRAVITY) then
     ! user output
     if (myrank == 0) then
-      if (GRAVITY) then
-        write(IMAIN,*) "  loading gravity"
-      else
-        write(IMAIN,*) "  loading rotation weights"
-      endif
+      write(IMAIN,*) "  loading gravity"
       call flush_IMAIN()
     endif
     call prepare_fields_gravity_device(Mesh_pointer,GRAVITY, &
                                        minus_deriv_gravity,minus_g, &
                                        wgll_cube,rhostore)
+  endif
+
+  if(ROTATION) then 
+    ! user output
+    if (myrank == 0) then
+      write(IMAIN,*) "  loading rotation"
+      call flush_IMAIN()
+    endif
+    call prepare_fields_rotation_device(Mesh_pointer,ROTATION,rmass)
   endif
 
   ! prepares fault rupture simulation

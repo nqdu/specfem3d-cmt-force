@@ -673,7 +673,7 @@ void FC_FUNC_(prepare_fields_acoustic_adj_dev,
 extern EXTERN_LANG
 void FC_FUNC_(prepare_fields_elastic_device,
               PREPARE_FIELDS_ELASTIC_DEVICE)(long* Mesh_pointer,
-                                             realw* rmass, realw* rmassx, realw* rmassy, realw* rmassz,
+                                             realw* rmassx, realw* rmassy, realw* rmassz,
                                              realw* rho_vp, realw* rho_vs,
                                              realw* h_kappav, realw* h_muv,
                                              int* num_phase_ispec_elastic,
@@ -801,7 +801,6 @@ void FC_FUNC_(prepare_fields_elastic_device,
   //synchronize_mpi();
 
   // mass matrix
-  gpuCreateCopy_todevice_realw((void**)&mp->d_rmass,rmass,mp->NGLOB_AB);
   gpuCreateCopy_todevice_realw((void**)&mp->d_rmassx,rmassx,mp->NGLOB_AB);
   gpuCreateCopy_todevice_realw((void**)&mp->d_rmassy,rmassy,mp->NGLOB_AB);
   gpuCreateCopy_todevice_realw((void**)&mp->d_rmassz,rmassz,mp->NGLOB_AB);
@@ -1497,6 +1496,24 @@ void FC_FUNC_(prepare_fields_gravity_device,
   GPU_ERROR_CHECKING("prepare_fields_gravity_device");
 }
 
+extern EXTERN_LANG
+void FC_FUNC_(prepare_fields_rotation_device,
+              PREPARE_FIELDS_ROTATION_DEVICE)(long* Mesh_pointer,
+                                              int* ROTATION,
+                                              realw* rmass)
+{
+  TRACE("prepare_fields_rotation_device");
+
+  Mesh* mp = (Mesh*)(*Mesh_pointer);
+
+  mp->ROTATION = *ROTATION;
+  if (mp->ROTATION){
+    gpuCreateCopy_todevice_realw((void**)&mp->d_rmass,rmass,mp->NGLOB_AB);
+  }
+
+  GPU_ERROR_CHECKING("prepare_fields_rotation_device");
+}
+
 /* ----------------------------------------------------------------------------------------------- */
 
 // unused yet...
@@ -2063,7 +2080,9 @@ TRACE("prepare_cleanup_device");
     }
 
     if (! mp->lts_mode){
-      gpuFree(mp->d_rmass);
+      if(mp->ROTATION){
+        gpuFree(mp->d_rmass);
+      }
       gpuFree(mp->d_rmassx);
       gpuFree(mp->d_rmassy);
       gpuFree(mp->d_rmassz);
