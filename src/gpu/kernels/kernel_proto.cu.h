@@ -602,6 +602,15 @@ __global__ void enforce_free_surface_cuda_kernel(field_p potential_acoustic,
                                                  const int* d_ibool,
                                                  const int* ispec_is_acoustic) ;
 
+__global__ void elastic_enforce_fixed_boundary_cuda_kernel(realw* displ,
+                                                           realw* veloc,
+                                                           realw* accel,
+                                                           const int num_fixed_bdry_faces,
+                                                           const int* fixed_bdry_ispec,
+                                                           const int* fixed_bdry_ijk,
+                                                           const int* d_ibool,
+                                                           const int* ispec_is_elastic) ;
+
 
 //
 // src/gpu/kernels/get_maximum_field_kernel.cu
@@ -933,6 +942,19 @@ __global__ void kernel_3_cuda_device(realw_p veloc,
                                      realw_const_p rmassx,
                                      realw_const_p rmassy,
                                      realw_const_p rmassz) ;
+
+__global__ void invert_mass_with_rotation_cuda_device(realw_p veloc,
+                                                      realw_p accel,
+                                                      int size,
+                                                      realw deltat,
+                                                      realw deltatover2,
+                                                      realw omega_x,
+                                                      realw omega_y,
+                                                      realw omega_z,
+                                                      realw_const_p rmass,
+                                                      realw_const_p rmassx,
+                                                      realw_const_p rmassy,
+                                                      realw_const_p rmassz) ;
 
 
 //

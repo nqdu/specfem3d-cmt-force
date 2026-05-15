@@ -673,7 +673,7 @@ void FC_FUNC_(prepare_fields_acoustic_adj_dev,
 extern EXTERN_LANG
 void FC_FUNC_(prepare_fields_elastic_device,
               PREPARE_FIELDS_ELASTIC_DEVICE)(long* Mesh_pointer,
-                                             realw* rmassx, realw* rmassy, realw* rmassz,
+                                             realw* rmass, realw* rmassx, realw* rmassy, realw* rmassz,
                                              realw* rho_vp, realw* rho_vs,
                                              realw* h_kappav, realw* h_muv,
                                              int* num_phase_ispec_elastic,
@@ -696,6 +696,9 @@ void FC_FUNC_(prepare_fields_elastic_device,
                                              int* free_surface_ispec,
                                              int* free_surface_ijk,
                                              int* num_free_surface_faces,
+                                             int* fixed_bdry_ispec,
+                                             int* fixed_bdry_ijk,
+                                             int* num_fixed_bdry_faces,
                                              int* ACOUSTIC_SIMULATION,
                                              int* num_colors_outer_elastic,
                                              int* num_colors_inner_elastic,
@@ -798,6 +801,7 @@ void FC_FUNC_(prepare_fields_elastic_device,
   //synchronize_mpi();
 
   // mass matrix
+  gpuCreateCopy_todevice_realw((void**)&mp->d_rmass,rmass,mp->NGLOB_AB);
   gpuCreateCopy_todevice_realw((void**)&mp->d_rmassx,rmassx,mp->NGLOB_AB);
   gpuCreateCopy_todevice_realw((void**)&mp->d_rmassy,rmassy,mp->NGLOB_AB);
   gpuCreateCopy_todevice_realw((void**)&mp->d_rmassz,rmassz,mp->NGLOB_AB);
@@ -994,6 +998,12 @@ void FC_FUNC_(prepare_fields_elastic_device,
                              3*NGLL2*mp->num_free_surface_faces);
       }
     }
+  }
+
+  mp->num_fixed_bdry_faces = *num_fixed_bdry_faces;
+  if (mp->num_fixed_bdry_faces > 0) {
+    gpuCreateCopy_todevice_int((void**)&mp->d_fixed_bdry_ispec,fixed_bdry_ispec,mp->num_fixed_bdry_faces);
+    gpuCreateCopy_todevice_int((void**)&mp->d_fixed_bdry_ijk,fixed_bdry_ijk,3*NGLL2*mp->num_fixed_bdry_faces);
   }
 
   // mesh coloring
@@ -1470,24 +1480,18 @@ void FC_FUNC_(prepare_fields_gravity_device,
 
     gpuCreateCopy_todevice_realw((void**)&mp->d_minus_deriv_gravity,minus_deriv_gravity,mp->NGLOB_AB);
     gpuCreateCopy_todevice_realw((void**)&mp->d_minus_g,minus_g,mp->NGLOB_AB);
-
-    // density
-    if (mp->d_rhostore == NULL){
-      // padded array
-      // Assuming NGLLX==5. Padded is then 128 (5^3+3)
-      int size_padded = NGLL3_PADDED * mp->NSPEC_AB;
-      gpuMalloc_realw((void**)&(mp->d_rhostore),size_padded);
-      // transfer constant element data with padding
-      /*
-      // way 1: slow...
-      for(int i=0; i < mp->NSPEC_AB; i++) {
-        gpuMemcpy_todevice_realw(mp->d_rhostore+i*NGLL3_PADDED, &rhostore[i*NGLL3],NGLL3);
-      }
-      */
-      // way 2: faster ...
-      gpuMemcpy2D_todevice_realw(mp->d_rhostore, NGLL3_PADDED, rhostore, NGLL3, NGLL3, mp->NSPEC_AB);
-    }
   }
+
+  if (mp->d_rhostore == NULL){
+    // padded array
+    // Assuming NGLLX==5. Padded is then 128 (5^3+3)
+    int size_padded = NGLL3_PADDED * mp->NSPEC_AB;
+    gpuMalloc_realw((void**)&(mp->d_rhostore),size_padded);
+    // transfer constant element data with padding
+    // way 2: faster ...
+    gpuMemcpy2D_todevice_realw(mp->d_rhostore, NGLL3_PADDED, rhostore, NGLL3, NGLL3, mp->NSPEC_AB);
+  }
+
   if (mp->d_wgll_cube == NULL) setConst_wgll_cube(h_wgll_cube,mp);
 
   GPU_ERROR_CHECKING("prepare_fields_gravity_device");
@@ -2059,12 +2063,17 @@ TRACE("prepare_cleanup_device");
     }
 
     if (! mp->lts_mode){
+      gpuFree(mp->d_rmass);
       gpuFree(mp->d_rmassx);
       gpuFree(mp->d_rmassy);
       gpuFree(mp->d_rmassz);
     }
 
     gpuFree(mp->d_phase_ispec_inner_elastic);
+    if (mp->num_fixed_bdry_faces > 0){
+      gpuFree(mp->d_fixed_bdry_ispec);
+      gpuFree(mp->d_fixed_bdry_ijk);
+    }
     if (mp->stacey_absorbing_conditions && mp->d_num_abs_boundary_faces > 0){
       gpuFree(mp->d_rho_vp);
       gpuFree(mp->d_rho_vs);

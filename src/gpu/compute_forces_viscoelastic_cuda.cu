@@ -1122,6 +1122,234 @@ void Kernel_2(int nb_blocks_to_compute,Mesh* mp,int d_iphase,realw d_deltat,
 
 /* ----------------------------------------------------------------------------------------------- */
 
+__global__ void compute_rot_forces_viscoelastic_cuda_kernel(const int nb_blocks_to_compute,
+                                                            const int* d_ibool,
+                                                            const int* d_phase_ispec_inner_elastic,
+                                                            const int num_phase_ispec_elastic,
+                                                            const int d_iphase,
+                                                            const int* d_irregular_element_number,
+                                                            realw_const_p d_displ,
+                                                            realw_const_p d_veloc,
+                                                            realw_p d_accel,
+                                                            realw_const_p d_xix,
+                                                            realw_const_p d_xiy,
+                                                            realw_const_p d_xiz,
+                                                            realw_const_p d_etax,
+                                                            realw_const_p d_etay,
+                                                            realw_const_p d_etaz,
+                                                            realw_const_p d_gammax,
+                                                            realw_const_p d_gammay,
+                                                            realw_const_p d_gammaz,
+                                                            const realw jacobian_regular,
+                                                            realw_const_p d_rhostore,
+                                                            realw_const_p wgll_cube,
+                                                            const realw omega_x,
+                                                            const realw omega_y,
+                                                            const realw omega_z) {
+
+  int bx = blockIdx.y * gridDim.x + blockIdx.x;
+  if (bx >= nb_blocks_to_compute) return;
+
+  int tx = threadIdx.x;
+  if (tx >= NGLL3) return;
+
+  int working_element = d_phase_ispec_inner_elastic[bx + num_phase_ispec_elastic * (d_iphase - 1)] - 1;
+  int offset = working_element * NGLL3_PADDED + tx;
+  int iglob = d_ibool[offset] - 1;
+
+  realw jacobianl = jacobian_regular;
+  int ispec_irreg = d_irregular_element_number[working_element] - 1;
+  if (ispec_irreg >= 0) {
+    int offset_irreg = ispec_irreg * NGLL3_PADDED + tx;
+    realw xixl = d_xix[offset_irreg];
+    realw xiyl = d_xiy[offset_irreg];
+    realw xizl = d_xiz[offset_irreg];
+    realw etaxl = d_etax[offset_irreg];
+    realw etayl = d_etay[offset_irreg];
+    realw etazl = d_etaz[offset_irreg];
+    realw gammaxl = d_gammax[offset_irreg];
+    realw gammayl = d_gammay[offset_irreg];
+    realw gammazl = d_gammaz[offset_irreg];
+
+    jacobianl = 1.f / (xixl * (etayl * gammazl - etazl * gammayl)
+                     - xiyl * (etaxl * gammazl - etazl * gammaxl)
+                     + xizl * (etaxl * gammayl - etayl * gammaxl));
+  }
+
+  realw u_x = d_displ[iglob * 3];
+  realw u_y = d_displ[iglob * 3 + 1];
+  realw u_z = d_displ[iglob * 3 + 2];
+  realw v_x = d_veloc[iglob * 3];
+  realw v_y = d_veloc[iglob * 3 + 1];
+  realw v_z = d_veloc[iglob * 3 + 2];
+
+  realw fac = d_rhostore[offset] * jacobianl * wgll_cube[tx];
+
+  realw cori_x = 2.f * (omega_y * v_z - omega_z * v_y);
+  realw cori_y = 2.f * (omega_z * v_x - omega_x * v_z);
+  realw cori_z = 2.f * (omega_x * v_y - omega_y * v_x);
+
+  realw centri_x = omega_y * omega_y * u_x + omega_z * omega_z * u_x - omega_x * omega_y * u_y - omega_x * omega_z * u_z;
+  realw centri_y = omega_z * omega_z * u_y + omega_x * omega_x * u_y - omega_y * omega_z * u_z - omega_x * omega_y * u_x;
+  realw centri_z = omega_x * omega_x * u_z + omega_y * omega_y * u_z - omega_x * omega_z * u_x - omega_y * omega_z * u_y;
+
+  atomicAdd(&d_accel[iglob * 3], fac * (cori_x + centri_x));
+  atomicAdd(&d_accel[iglob * 3 + 1], fac * (cori_y + centri_y));
+  atomicAdd(&d_accel[iglob * 3 + 2], fac * (cori_z + centri_z));
+}
+
+/* ----------------------------------------------------------------------------------------------- */
+
+extern EXTERN_LANG
+void FC_FUNC_(elastic_enforce_fixed_boundary_cuda,
+              ELASTIC_ENFORCE_FIXED_BOUNDARY_CUDA)(long* Mesh_pointer) {
+
+  TRACE("elastic_enforce_fixed_boundary_cuda");
+
+  Mesh* mp = (Mesh*)(*Mesh_pointer); // get Mesh from fortran integer wrapper
+
+  if (mp->num_fixed_bdry_faces == 0) return;
+
+  int num_blocks_x, num_blocks_y;
+  get_blocks_xy(mp->num_fixed_bdry_faces,&num_blocks_x,&num_blocks_y);
+
+  dim3 grid(num_blocks_x,num_blocks_y,1);
+  dim3 threads(NGLL2,1,1);
+
+#ifdef USE_CUDA
+  if (run_cuda){
+    elastic_enforce_fixed_boundary_cuda_kernel<<<grid,threads,0,mp->compute_stream>>>(mp->d_displ,
+                                                                                       mp->d_veloc,
+                                                                                       mp->d_accel,
+                                                                                       mp->num_fixed_bdry_faces,
+                                                                                       mp->d_fixed_bdry_ispec,
+                                                                                       mp->d_fixed_bdry_ijk,
+                                                                                       mp->d_ibool,
+                                                                                       mp->d_ispec_is_elastic);
+  }
+#endif
+#ifdef USE_HIP
+  if (run_hip){
+    hipLaunchKernelGGL(elastic_enforce_fixed_boundary_cuda_kernel, dim3(grid), dim3(threads), 0, mp->compute_stream,
+                       mp->d_displ,
+                       mp->d_veloc,
+                       mp->d_accel,
+                       mp->num_fixed_bdry_faces,
+                       mp->d_fixed_bdry_ispec,
+                       mp->d_fixed_bdry_ijk,
+                       mp->d_ibool,
+                       mp->d_ispec_is_elastic);
+  }
+#endif
+
+  GPU_ERROR_CHECKING("elastic_enforce_fixed_boundary_cuda");
+}
+
+/* ----------------------------------------------------------------------------------------------- */
+
+extern EXTERN_LANG
+void FC_FUNC_(compute_rot_forces_viscoelastic_cuda,
+              COMPUTE_ROT_FORCES_VISCOELASTIC_CUDA)(long* Mesh_pointer,
+                                                    int* iphase,
+                                                    int* nspec_outer_elastic,
+                                                    int* nspec_inner_elastic,
+                                                    realw* omega,
+                                                    int* FORWARD_OR_ADJOINT_f) {
+
+  TRACE("compute_rot_forces_viscoelastic_cuda");
+
+  Mesh* mp = (Mesh*)(*Mesh_pointer); // get Mesh from fortran integer wrapper
+  int FORWARD_OR_ADJOINT = *FORWARD_OR_ADJOINT_f;
+
+  realw *displ, *veloc, *accel;
+  if (FORWARD_OR_ADJOINT == 1) {
+    displ = mp->d_displ;
+    veloc = mp->d_veloc;
+    accel = mp->d_accel;
+  } else if (FORWARD_OR_ADJOINT == 3) {
+    displ = mp->d_b_displ;
+    veloc = mp->d_b_veloc;
+    accel = mp->d_b_accel;
+  } else {
+    exit_on_error("Error invalid FORWARD_OR_ADJOINT in compute_rot_forces_viscoelastic_cuda()");
+    return;
+  }
+
+  int num_elements;
+  if (*iphase == 1)
+    num_elements = *nspec_outer_elastic;
+  else
+    num_elements = *nspec_inner_elastic;
+
+  if (num_elements == 0) return;
+
+  int num_blocks_x, num_blocks_y;
+  get_blocks_xy(num_elements, &num_blocks_x, &num_blocks_y);
+
+  dim3 grid(num_blocks_x,num_blocks_y,1);
+  dim3 threads(NGLL3,1,1);
+
+#ifdef USE_CUDA
+  if (run_cuda){
+    compute_rot_forces_viscoelastic_cuda_kernel<<<grid,threads,0,mp->compute_stream>>>(num_elements,
+                                                                                        mp->d_ibool,
+                                                                                        mp->d_phase_ispec_inner_elastic,
+                                                                                        mp->num_phase_ispec_elastic,
+                                                                                        *iphase,
+                                                                                        mp->d_irregular_element_number,
+                                                                                        displ,
+                                                                                        veloc,
+                                                                                        accel,
+                                                                                        mp->d_xix,
+                                                                                        mp->d_xiy,
+                                                                                        mp->d_xiz,
+                                                                                        mp->d_etax,
+                                                                                        mp->d_etay,
+                                                                                        mp->d_etaz,
+                                                                                        mp->d_gammax,
+                                                                                        mp->d_gammay,
+                                                                                        mp->d_gammaz,
+                                                                                        mp->jacobian_regular,
+                                                                                        mp->d_rhostore,
+                                                                                        mp->d_wgll_cube,
+                                                                                        omega[0],
+                                                                                        omega[1],
+                                                                                        omega[2]);
+  }
+#endif
+#ifdef USE_HIP
+  if (run_hip){
+    hipLaunchKernelGGL(compute_rot_forces_viscoelastic_cuda_kernel, dim3(grid), dim3(threads), 0, mp->compute_stream,
+                       num_elements,
+                       mp->d_ibool,
+                       mp->d_phase_ispec_inner_elastic,
+                       mp->num_phase_ispec_elastic,
+                       *iphase,
+                       mp->d_irregular_element_number,
+                       displ,
+                       veloc,
+                       accel,
+                       mp->d_xix,
+                       mp->d_xiy,
+                       mp->d_xiz,
+                       mp->d_etax,
+                       mp->d_etay,
+                       mp->d_etaz,
+                       mp->d_gammax,
+                       mp->d_gammay,
+                       mp->d_gammaz,
+                       mp->jacobian_regular,
+                       mp->d_rhostore,
+                       mp->d_wgll_cube,
+                       omega[0],
+                       omega[1],
+                       omega[2]);
+  }
+#endif
+
+  GPU_ERROR_CHECKING("compute_rot_forces_viscoelastic_cuda");
+}
+
 
 extern EXTERN_LANG
 void FC_FUNC_(compute_forces_viscoelastic_cuda,

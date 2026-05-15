@@ -604,6 +604,11 @@ typedef struct mesh_ {
   int* d_free_surface_ijk;
   int num_free_surface_faces;
 
+  // fixed boundary faces for elastic simulations
+  int* d_fixed_bdry_ispec;
+  int* d_fixed_bdry_ijk;
+  int num_fixed_bdry_faces;
+
   // surface movie elements to save for noise tomography
   realw* d_noise_surface_movie;
 
@@ -701,6 +706,9 @@ typedef struct mesh_ {
   realw* d_rmass_ocean_load;
   realw* d_free_surface_normal;
   int* d_updated_dof_ocean_load;
+
+  // rotation-aware elastic inverse mass
+  realw* d_rmass;
 
   // C-PML
   int NSPEC_CPML;

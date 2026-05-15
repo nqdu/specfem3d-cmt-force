@@ -65,3 +65,45 @@ __global__ void enforce_free_surface_cuda_kernel(field_p potential_acoustic,
 }
 
 
+__global__ void elastic_enforce_fixed_boundary_cuda_kernel(realw* displ,
+                                                           realw* veloc,
+                                                           realw* accel,
+                                                           const int num_fixed_bdry_faces,
+                                                           const int* fixed_bdry_ispec,
+                                                           const int* fixed_bdry_ijk,
+                                                           const int* d_ibool,
+                                                           const int* ispec_is_elastic) {
+  int iface = blockIdx.x + gridDim.x * blockIdx.y;
+
+  if (iface < num_fixed_bdry_faces) {
+
+    int ispec = fixed_bdry_ispec[iface] - 1;
+
+    if (ispec_is_elastic[ispec]) {
+
+      int igll = threadIdx.x + threadIdx.y * blockDim.x;
+
+      int i = fixed_bdry_ijk[INDEX3(NDIM,NGLL2,0,igll,iface)] - 1;
+      int j = fixed_bdry_ijk[INDEX3(NDIM,NGLL2,1,igll,iface)] - 1;
+      int k = fixed_bdry_ijk[INDEX3(NDIM,NGLL2,2,igll,iface)] - 1;
+
+      int iglob = d_ibool[INDEX4_PADDED(NGLLX,NGLLX,NGLLX,i,j,k,ispec)] - 1;
+
+      if (iglob >= 0) {
+        displ[iglob * NDIM] = 0.f;
+        displ[iglob * NDIM + 1] = 0.f;
+        displ[iglob * NDIM + 2] = 0.f;
+
+        veloc[iglob * NDIM] = 0.f;
+        veloc[iglob * NDIM + 1] = 0.f;
+        veloc[iglob * NDIM + 2] = 0.f;
+
+        accel[iglob * NDIM] = 0.f;
+        accel[iglob * NDIM + 1] = 0.f;
+        accel[iglob * NDIM + 2] = 0.f;
+      }
+    }
+  }
+}
+
+

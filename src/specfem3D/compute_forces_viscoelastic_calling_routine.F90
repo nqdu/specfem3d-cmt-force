@@ -147,6 +147,8 @@
                                             nspec_outer_elastic, &
                                             nspec_inner_elastic, &
                                             COMPUTE_AND_STORE_STRAIN,ATTENUATION,1) ! 1 == forward
+      if (ROTATION) call compute_rot_forces_viscoelastic_cuda(Mesh_pointer,iphase,nspec_outer_elastic,nspec_inner_elastic, &
+                          rot_angluar_velocity,1)
     endif
 
     ! debug timing
@@ -406,9 +408,14 @@
     call kernel_3_a_cuda(Mesh_pointer,deltatover2,b_deltatover2,APPROXIMATE_OCEAN_LOAD,1) ! 1 == forward
   endif
 
-  if(ROTATION .and. (.not. GPU_MODE)) then  
-    call invert_mass_with_rotation(rot_angluar_velocity,rmass,rmassx,&
-                                    rmassy,rmassz,accel)
+  if (ROTATION) then
+    if (.not. GPU_MODE) then
+      call invert_mass_with_rotation(rot_angluar_velocity,rmass,rmassx,&
+                                      rmassy,rmassz,accel)
+    else
+      call invert_mass_with_rotation_cuda(Mesh_pointer,deltat,b_deltat,deltatover2,b_deltatover2, &
+                                          rot_angluar_velocity,APPROXIMATE_OCEAN_LOAD,1)
+    endif
   endif
 
   ! updates acceleration with ocean load term
@@ -535,6 +542,8 @@
                                             nspec_outer_elastic, &
                                             nspec_inner_elastic, &
                                             COMPUTE_AND_STORE_STRAIN,ATTENUATION,3) ! 3 == backward
+      if (ROTATION) call compute_rot_forces_viscoelastic_cuda(Mesh_pointer,iphase,nspec_outer_elastic,nspec_inner_elastic, &
+                          rot_angluar_velocity,3)
     endif
 
     ! computes additional contributions
@@ -667,6 +676,11 @@
     call kernel_3_a_cuda(Mesh_pointer,deltatover2,b_deltatover2,APPROXIMATE_OCEAN_LOAD,3) ! 3 == backward
   endif
 
+  if (ROTATION .and. GPU_MODE) then
+    call invert_mass_with_rotation_cuda(Mesh_pointer,deltat,b_deltat,deltatover2,b_deltatover2, &
+                                        rot_angluar_velocity,APPROXIMATE_OCEAN_LOAD,3)
+  endif
+
   ! updates acceleration with ocean load term
   if (APPROXIMATE_OCEAN_LOAD) then
     if (.not. GPU_MODE) then
@@ -761,6 +775,12 @@
                                           nspec_outer_elastic, &
                                           nspec_inner_elastic, &
                                           COMPUTE_AND_STORE_STRAIN,ATTENUATION,0) ! 0 == both combined
+    if (ROTATION) then
+      call compute_rot_forces_viscoelastic_cuda(Mesh_pointer,iphase,nspec_outer_elastic,nspec_inner_elastic, &
+                                                rot_angluar_velocity,1)
+      call compute_rot_forces_viscoelastic_cuda(Mesh_pointer,iphase,nspec_outer_elastic,nspec_inner_elastic, &
+                                                rot_angluar_velocity,3)
+    endif
 
     ! while inner elements compute "Kernel_2", we wait for MPI to
     ! finish and transfer the boundary terms to the device asynchronously
@@ -879,6 +899,13 @@
   call kernel_3_a_cuda(Mesh_pointer,deltatover2,b_deltatover2,APPROXIMATE_OCEAN_LOAD,1) ! 1 == forward
   call kernel_3_a_cuda(Mesh_pointer,deltatover2,b_deltatover2,APPROXIMATE_OCEAN_LOAD,3) ! 3 == backward
 
+  if (ROTATION) then
+    call invert_mass_with_rotation_cuda(Mesh_pointer,deltat,b_deltat,deltatover2,b_deltatover2, &
+                                        rot_angluar_velocity,APPROXIMATE_OCEAN_LOAD,1)
+    call invert_mass_with_rotation_cuda(Mesh_pointer,deltat,b_deltat,deltatover2,b_deltatover2, &
+                                        rot_angluar_velocity,APPROXIMATE_OCEAN_LOAD,3)
+  endif
+
   ! updates acceleration with ocean load term
   if (APPROXIMATE_OCEAN_LOAD) then
     ! assumes SIMULATION_TYPE == 3
@@ -977,13 +1004,18 @@
   end subroutine invert_mass_with_rotation
 
   subroutine elastic_enforce_fixed_boundary()
-    use specfem_par, only: ibool, num_fixed_bdry_faces
+    use specfem_par, only: ibool, num_fixed_bdry_faces, Mesh_pointer, GPU_MODE
     use specfem_par,only: fixed_bdry_ijk,fixed_bdry_ispec
     use specfem_par_elastic, only: accel, displ, veloc,ispec_is_elastic
     use constants, only: NGLLSQUARE
     implicit none
 
     integer :: iglob, i,j,k,igll2,iface,ispec
+
+    if (GPU_MODE) then
+      call elastic_enforce_fixed_boundary_cuda(Mesh_pointer)
+      return
+    endif
 
     do iface = 1, num_fixed_bdry_faces
       ispec = fixed_bdry_ispec(iface)

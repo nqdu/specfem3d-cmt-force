@@ -140,7 +140,7 @@
     endif
 
     call prepare_fields_elastic_device(Mesh_pointer, &
-                                       rmassx,rmassy,rmassz, &
+                                       rmass,rmassx,rmassy,rmassz, &
                                        rho_vp,rho_vs, &
                                        kappastore, mustore, &
                                        num_phase_ispec_elastic,phase_ispec_inner_elastic, &
@@ -159,6 +159,7 @@
                                        NOISE_TOMOGRAPHY, &
                                        free_surface_normal,free_surface_ispec,free_surface_ijk, &
                                        num_free_surface_faces, &
+                                       fixed_bdry_ispec,fixed_bdry_ijk,num_fixed_bdry_faces, &
                                        ACOUSTIC_SIMULATION, &
                                        num_colors_outer_elastic,num_colors_inner_elastic, &
                                        num_elem_colors_elastic, &
@@ -238,11 +239,15 @@
 
   endif ! NOISE_TOMOGRAPHY
 
-  ! prepares gravity arrays
-  if (GRAVITY) then
+  ! prepares gravity-related arrays and shared integration weights
+  if (GRAVITY .or. ROTATION) then
     ! user output
     if (myrank == 0) then
-      write(IMAIN,*) "  loading gravity"
+      if (GRAVITY) then
+        write(IMAIN,*) "  loading gravity"
+      else
+        write(IMAIN,*) "  loading rotation weights"
+      endif
       call flush_IMAIN()
     endif
     call prepare_fields_gravity_device(Mesh_pointer,GRAVITY, &

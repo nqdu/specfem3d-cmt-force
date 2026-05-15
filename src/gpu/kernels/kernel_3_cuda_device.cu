@@ -55,4 +55,58 @@ __global__ void kernel_3_cuda_device(realw_p veloc,
   }
 }
 
+__global__ void invert_mass_with_rotation_cuda_device(realw_p veloc,
+                                                      realw_p accel,
+                                                      int size,
+                                                      realw deltat,
+                                                      realw deltatover2,
+                                                      realw omega_x,
+                                                      realw omega_y,
+                                                      realw omega_z,
+                                                      realw_const_p rmass,
+                                                      realw_const_p rmassx,
+                                                      realw_const_p rmassy,
+                                                      realw_const_p rmassz) {
+
+  int id = threadIdx.x + (blockIdx.x + blockIdx.y*gridDim.x)*blockDim.x;
+
+  if (id < size) {
+    realw wx = rmassx[id];
+    realw wy = rmassy[id];
+    realw wz = rmassz[id];
+
+    realw ax = rmass[id] * omega_x * deltat;
+    realw ay = rmass[id] * omega_y * deltat;
+    realw az = rmass[id] * omega_z * deltat;
+
+    realw bx = accel[3*id];
+    realw by = accel[3*id+1];
+    realw bz = accel[3*id+2];
+
+    realw w_yz = wy * wz;
+    realw w_xz = wx * wz;
+    realw w_xy = wx * wy;
+    realw d = 1.f + w_yz * ax * ax + w_xz * ay * ay + w_xy * az * az;
+    realw inv_d = 1.f / d;
+
+    realw c_xy = wz * ax * ay;
+    realw c_xz = wy * ax * az;
+    realw c_yz = wx * ay * az;
+
+    realw ux = inv_d * ((1.f + w_yz * ax * ax) * bx + wx * (az + c_xy) * by + wx * (ax * wz * az - ay) * bz);
+    realw uy = inv_d * (wy * (-az + c_xy) * bx + (1.f + w_xz * ay * ay) * by + wy * (ax + c_yz) * bz);
+    realw uz = inv_d * (wz * (ay + c_xz) * bx + wz * (-ax + c_yz) * by + (1.f + w_xy * az * az) * bz);
+
+    accel[3*id] = ux;
+    accel[3*id+1] = uy;
+    accel[3*id+2] = uz;
+
+    if (veloc != NULL) {
+      veloc[3*id] += deltatover2 * (ux - bx);
+      veloc[3*id+1] += deltatover2 * (uy - by);
+      veloc[3*id+2] += deltatover2 * (uz - bz);
+    }
+  }
+}
+
 

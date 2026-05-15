@@ -237,6 +237,27 @@ void FC_FUNC_(compute_forces_viscoelastic_cuda,
                                                 int* ATTENUATION,
                                                 int* FORWARD_OR_ADJOINT_f) {}
 
+                              void FC_FUNC_(invert_mass_with_rotation_cuda,
+                                            INVERT_MASS_WITH_ROTATION_CUDA)(long* Mesh_pointer,
+                                                                            realw* deltat_F,
+                                                                            realw* b_deltat_F,
+                                                                            realw* deltatover2_F,
+                                                                            realw* b_deltatover2_F,
+                                                                            realw* omega,
+                                                                            int* APPROXIMATE_OCEAN_LOAD,
+                                                                            int* FORWARD_OR_ADJOINT) {}
+
+void FC_FUNC_(elastic_enforce_fixed_boundary_cuda,
+              ELASTIC_ENFORCE_FIXED_BOUNDARY_CUDA)(long* Mesh_pointer) {}
+
+void FC_FUNC_(compute_rot_forces_viscoelastic_cuda,
+              COMPUTE_ROT_FORCES_VISCOELASTIC_CUDA)(long* Mesh_pointer,
+                                                    int* iphase,
+                                                    int* nspec_outer_elastic,
+                                                    int* nspec_inner_elastic,
+                                                    realw* omega,
+                                                    int* FORWARD_OR_ADJOINT_f) {}
+
 
 //
 // src/gpu/compute_kernels_cuda.cu
@@ -646,7 +667,7 @@ void FC_FUNC_(prepare_fields_acoustic_adj_dev,
 
 void FC_FUNC_(prepare_fields_elastic_device,
               PREPARE_FIELDS_ELASTIC_DEVICE)(long* Mesh_pointer,
-                                             realw* rmassx, realw* rmassy, realw* rmassz,
+                                             realw* rmass, realw* rmassx, realw* rmassy, realw* rmassz,
                                              realw* rho_vp, realw* rho_vs,
                                              realw* h_kappav, realw* h_muv,
                                              int* num_phase_ispec_elastic,
@@ -669,6 +690,9 @@ void FC_FUNC_(prepare_fields_elastic_device,
                                              int* free_surface_ispec,
                                              int* free_surface_ijk,
                                              int* num_free_surface_faces,
+                                             int* fixed_bdry_ispec,
+                                             int* fixed_bdry_ijk,
+                                             int* num_fixed_bdry_faces,
                                              int* ACOUSTIC_SIMULATION,
                                              int* num_colors_outer_elastic,
                                              int* num_colors_inner_elastic,

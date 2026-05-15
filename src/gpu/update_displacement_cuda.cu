@@ -380,6 +380,123 @@ void FC_FUNC_(kernel_3_a_cuda,
   GPU_ERROR_CHECKING("after kernel 3 a");
 }
 
+extern EXTERN_LANG
+void FC_FUNC_(invert_mass_with_rotation_cuda,
+              INVERT_MASS_WITH_ROTATION_CUDA)(long* Mesh_pointer,
+                                              realw* deltat_F,
+                                              realw* b_deltat_F,
+                                              realw* deltatover2_F,
+                                              realw* b_deltatover2_F,
+                                              realw* omega,
+                                              int* APPROXIMATE_OCEAN_LOAD,
+                                              int* FORWARD_OR_ADJOINT) {
+
+  TRACE("invert_mass_with_rotation_cuda");
+
+  Mesh* mp = (Mesh*)(*Mesh_pointer);
+
+  if (*FORWARD_OR_ADJOINT != 1 && *FORWARD_OR_ADJOINT != 3) {
+    exit_on_error("Error invalid FORWARD_OR_ADJOINT in invert_mass_with_rotation_cuda() routine");
+  }
+
+  int size = mp->NGLOB_AB;
+
+  int blocksize = BLOCKSIZE_KERNEL3;
+  int size_padded = ((int)ceil(((double)size)/((double)blocksize)))*blocksize;
+
+  int num_blocks_x, num_blocks_y;
+  get_blocks_xy(size_padded/blocksize,&num_blocks_x,&num_blocks_y);
+
+  dim3 grid(num_blocks_x,num_blocks_y);
+  dim3 threads(blocksize,1,1);
+
+  realw *veloc, *accel;
+  realw deltat, deltatover2;
+  if (*FORWARD_OR_ADJOINT == 1) {
+    veloc = mp->d_veloc;
+    accel = mp->d_accel;
+    deltat = *deltat_F;
+    deltatover2 = *deltatover2_F;
+  } else {
+    veloc = mp->d_b_veloc;
+    accel = mp->d_b_accel;
+    deltat = *b_deltat_F;
+    deltatover2 = *b_deltatover2_F;
+  }
+
+  if (*APPROXIMATE_OCEAN_LOAD == 0) {
+#ifdef USE_CUDA
+    if (run_cuda) {
+      invert_mass_with_rotation_cuda_device<<<grid,threads,0,mp->compute_stream>>>(veloc,
+                                                                                    accel,
+                                                                                    size,
+                                                                                    deltat,
+                                                                                    deltatover2,
+                                                                                    omega[0],
+                                                                                    omega[1],
+                                                                                    omega[2],
+                                                                                    mp->d_rmass,
+                                                                                    mp->d_rmassx,
+                                                                                    mp->d_rmassy,
+                                                                                    mp->d_rmassz);
+    }
+#endif
+#ifdef USE_HIP
+    if (run_hip) {
+      hipLaunchKernelGGL(invert_mass_with_rotation_cuda_device, dim3(grid), dim3(threads), 0, mp->compute_stream,
+                                                                veloc,
+                                                                accel,
+                                                                size,
+                                                                deltat,
+                                                                deltatover2,
+                                                                omega[0],
+                                                                omega[1],
+                                                                omega[2],
+                                                                mp->d_rmass,
+                                                                mp->d_rmassx,
+                                                                mp->d_rmassy,
+                                                                mp->d_rmassz);
+    }
+#endif
+  } else {
+#ifdef USE_CUDA
+    if (run_cuda) {
+      invert_mass_with_rotation_cuda_device<<<grid,threads,0,mp->compute_stream>>>(NULL,
+                                                                                    accel,
+                                                                                    size,
+                                                                                    deltat,
+                                                                                    deltatover2,
+                                                                                    omega[0],
+                                                                                    omega[1],
+                                                                                    omega[2],
+                                                                                    mp->d_rmass,
+                                                                                    mp->d_rmassx,
+                                                                                    mp->d_rmassy,
+                                                                                    mp->d_rmassz);
+    }
+#endif
+#ifdef USE_HIP
+    if (run_hip) {
+      hipLaunchKernelGGL(invert_mass_with_rotation_cuda_device, dim3(grid), dim3(threads), 0, mp->compute_stream,
+                                                                NULL,
+                                                                accel,
+                                                                size,
+                                                                deltat,
+                                                                deltatover2,
+                                                                omega[0],
+                                                                omega[1],
+                                                                omega[2],
+                                                                mp->d_rmass,
+                                                                mp->d_rmassx,
+                                                                mp->d_rmassy,
+                                                                mp->d_rmassz);
+    }
+#endif
+  }
+
+  GPU_ERROR_CHECKING("after invert mass with rotation");
+}
+
 /* ----------------------------------------------------------------------------------------------- */
 
 extern EXTERN_LANG
