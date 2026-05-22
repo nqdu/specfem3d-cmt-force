@@ -1,11 +1,11 @@
 /**
- * @file petsc_routines_nopetsc.c
+ * @file petsc_routines_stubs.c
  * @brief No-op stubs for all PETSc interface routines.
  *
- * Compiled instead of petsc_routines.c when PETSc is not available
- * (i.e. when WITH_PETSC is not set).  Every function is a silent no-op
- * so the rest of the code links and runs without modification; callers
- * that actually invoke these routines will simply do nothing.
+ * Compiled instead of petsc_routines.c / petsc_routines_coo.c when PETSc
+ * is not available (i.e. when WITH_PETSC is not set). Every function is a
+ * silent no-op so the rest of the code links and runs without modification;
+ * callers that actually invoke these routines will simply do nothing.
  */
 
 #include <stddef.h>   /* NULL */
@@ -45,28 +45,18 @@ void FC_FUNC_(setup_petsc,SETUP_PETSC)(long *h,
  * @brief No-op stub: does not assemble any element stiffness contributions.
  */
 void FC_FUNC_(fill_mat_petsc,FILL_MAT_PETSC)(long *h,
-                                             const int    *global_indices,
-                                             const double *k_elem)
+                                             const double *coo_v)
 {
-    UNUSED(h); UNUSED(global_indices); UNUSED(k_elem);
+    UNUSED(h); UNUSED(coo_v);
 }
 
 /**
  * @brief No-op stub: does not assemble any element force contributions.
  */
 void FC_FUNC_(fill_vec_petsc,FILL_VEC_PETSC)(long *h,
-                                             const int    *global_indices,
                                              const double *f_elem)
 {
-    UNUSED(h); UNUSED(global_indices); UNUSED(f_elem);
-}
-
-/**
- * @brief No-op stub: does not finalise any assembly.
- */
-void FC_FUNC_(assemble_petsc,ASSEMBLE_PETSC)(long *h)
-{
-    UNUSED(h);
+    UNUSED(h); UNUSED(f_elem);
 }
 
 /**

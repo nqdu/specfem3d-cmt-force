@@ -190,6 +190,17 @@ AC_ARG_ENABLE([vtk],
 AM_CONDITIONAL([COND_VTK], [test x"$want_vtk" != xno])
 
 ###
+### PETSc
+###
+
+AC_ARG_ENABLE([petsc],
+  [AS_HELP_STRING([--enable-petsc],
+    [build PETSc linear solver backend @<:@default=no@:>@])],
+  [want_petsc="$enableval"],
+  [want_petsc=no])
+AM_CONDITIONAL([COND_PETSC], [test x"$want_petsc" != xno])
+
+###
 ### ADIOS
 ###
 
@@ -416,6 +427,8 @@ AC_ARG_VAR(SCOTCH_LIBDIR, [Directory where Scotch libraries are installed])
 AC_ARG_VAR(MPIFC, [MPI Fortran compiler command])
 AC_ARG_VAR(MPILIBS, [extra libraries for linking MPI programs])
 AC_ARG_VAR(MPICC, [MPI C compiler command])
+AC_ARG_VAR(PETSC_CPPFLAGS, [PETSc preprocessor flags])
+AC_ARG_VAR(PETSCLIBS, [PETSc libraries for linking programs])
 
 AC_ARG_VAR(FLAGS_CHECK, [Fortran compiler flags])
 
@@ -511,6 +524,57 @@ AS_IF([test x"$want_adios2" != xno], [
     # in case adios2 c file compilation needs mpi
     AC_SUBST([MPICC])
 ])
+
+  ###
+  ### PETSc
+  ###
+
+  AS_IF([test x"$want_petsc" != xno], [
+    AS_BOX([PETSc])
+
+    if test "$want_mpi" != yes; then
+      AC_MSG_ERROR([Cannot compile with PETSc without MPI.])
+    fi
+
+    AC_PATH_PROG([PKG_CONFIG], [pkg-config])
+    if test -z "$PKG_CONFIG"; then
+      AC_MSG_ERROR([pkg-config is required to enable PETSc.])
+    fi
+
+    if test x"$PETSC_CPPFLAGS" = x || test x"$PETSCLIBS" = x; then
+      AC_MSG_CHECKING([for PETSc pkg-config module])
+      petsc_pkg_name=
+      for petsc_candidate in PETSc petsc; do
+        if $PKG_CONFIG --exists "$petsc_candidate"; then
+          petsc_pkg_name=$petsc_candidate
+          break
+        fi
+      done
+      if test -z "$petsc_pkg_name"; then
+        AC_MSG_RESULT([not found])
+        AC_MSG_ERROR([PETSc pkg-config module not found; set PETSC_CPPFLAGS and PETSCLIBS manually or adjust PKG_CONFIG_PATH.])
+      fi
+      AC_MSG_RESULT([$petsc_pkg_name])
+
+      if test x"$PETSC_CPPFLAGS" = x; then
+        PETSC_CPPFLAGS=`$PKG_CONFIG --cflags "$petsc_pkg_name"`
+      fi
+      if test x"$PETSCLIBS" = x; then
+        PETSCLIBS=`$PKG_CONFIG --libs "$petsc_pkg_name"`
+      fi
+    fi
+
+    CPPFLAGS="$CPPFLAGS $PETSC_CPPFLAGS"
+    WITH_PETSC=yes
+
+    AC_MSG_NOTICE([PETSc preprocessor flags: $PETSC_CPPFLAGS])
+    AC_MSG_NOTICE([PETSc libraries: $PETSCLIBS])
+  ], [
+    WITH_PETSC=no
+  ])
+  AC_SUBST([WITH_PETSC])
+  AC_SUBST([PETSC_CPPFLAGS])
+  AC_SUBST([PETSCLIBS])
 
 ###
 ### ASDF

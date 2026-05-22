@@ -1,0 +1,4 @@
+{
+    "fortran.linter.includePaths": [ "${workspaceFolder}/setup","/opt/openmpi-5.0.6/include"],
+    "fortran.linter.modOutput": "${workspaceFolder}/lib"
+}

@@ -23,7 +23,7 @@ module static_module
   
     ! for PETSc parallel matrix assembly
     logical :: USE_PETSC_AS_BACKEND = .false. ! whether to use PETSc as the linear solver backend, if false, a simple CG solver implemented in Fortran will be used, this is mainly for testing and debugging purposes
-    integer(kind=8) :: petcs_ptr ! dummy variable to hold PETSc pointers as integers, will be cast to proper types in C
+    integer(kind=8) :: petsc_ptr ! dummy variable to hold PETSc pointers as integers, will be cast to proper types in C
     integer, dimension(:), allocatable :: owner_rank ! shape(NGLOB_AB), stores the owning rank for each global DOF, used for parallel assembly with PETSc
 
     contains 
@@ -85,6 +85,7 @@ module static_module
         !print*, "no USE_PETSC_AS_BACKEND specified, default to true"
         ssol%USE_PETSC_AS_BACKEND = .false.
       endif
+      print*, "USE_PETSC_AS_BACKEND = ", ssol%USE_PETSC_AS_BACKEND
 
 
       ! close
@@ -125,7 +126,6 @@ module static_module
     real(kind=dp) :: fp(NDIM), temp, normal_vec(NDIM)
     real(kind=CUSTOM_REAL) :: omega(NDIM), rot_org(NDIM),tempx,tempy,tempz 
     real(kind=CUSTOM_REAL) :: xp, yp,zp
-    integer :: ibool0_loc(NGLLX,NGLLY,NGLLZ)
 
     ! element wise force terms
     real(kind=dp), allocatable :: elem_force(:,:,:,:,:) ! shape(NDIM,NGLLX,NGLLY,NGLLZ,nspec)
@@ -335,10 +335,12 @@ module static_module
 
     ! check if PETSc assembly is enabled, if so, we need to assemble the global force vector using MPI communication, otherwise we can directly store the interpolated force in force_ext and let the Fortran solver handle the assembly
     if(ssol%USE_PETSC_AS_BACKEND) then 
-      do ispec = 1,nspec
-        ibool0_loc(:,:,:) = ibool(:,:,:,ispec) - 1 ! convert to 0-based indexing for C
-        call fill_vec_petsc(ssol%petcs_ptr, ibool0_loc, elem_force(:,:,:,:,ispec))
-      enddo
+      if(myrank == 0) then
+        print*,'-------------------------------'
+        print*, "Assembling global force vector for PETSc backend..."
+        print*,'-------------------------------'
+      end if
+      call fill_vec_petsc(ssol%petsc_ptr, elem_force(:,:,:,:,:))
     else 
       ! directly store the interpolated force in force_ext
       ssol%force_ext(:,:) = 0.0_CUSTOM_REAL
@@ -623,7 +625,7 @@ module static_module
     use specfem_par, only: num_roller_bdry_faces,roller_bdry_ijk, &
                             roller_bdry_ispec, roller_bdry_normal
 
-    use petsc_interfaces, only: fill_mat_petsc, assemble_petsc
+    use petsc_interfaces, only: fill_mat_petsc
     use petsc_interfaces,only: solve_petsc,extract_petsc
 
     implicit none
@@ -632,7 +634,7 @@ module static_module
     class(static_solver_class), intent(inout) :: this
 
 
-    real(kind=dp), allocatable :: Kloc(:,:,:,:)
+    real(kind=dp), pointer :: Kloc(:,:,:,:)
     integer :: ibool0_loc(NGLLX,NGLLY,NGLLZ), ispec
     real(kind=CUSTOM_REAL), dimension(NGLLX,NGLLY,NGLLZ) :: ux,uy,uz 
     integer :: i, j, k, p, q, r, node_in, node_out
@@ -643,12 +645,13 @@ module static_module
     real(kind=dp) :: Pmat(NDIM,NDIM), norm_vec(NDIM), Ktemp(NDIM,NDIM)
     real(kind=dp), allocatable :: displ_dp(:,:)
     real(kind=CUSTOM_REAL), allocatable :: kdotu(:,:)
+    real(kind=dp),target, allocatable :: coo_v(:,:,:,:,:) ! shape(NDIM,NGLL3,NDIM,NGLL3,NSPEC_AB),coo values for stiffness matrix, used for PETSc assembly
 
     ! boundary arrays
     integer,allocatable :: fixed_bdry_faces(:,:), roller_bdry_faces(:,:)
 
     ! allocate space 
-    allocate(Kloc(NDIM,NGLL3,NDIM,NGLL3), &
+    allocate(coo_v(NDIM,NGLL3,NDIM,NGLL3,NSPEC_AB), &
             displ_dp(NDIM,NGLOB_AB), kdotu(NDIM,NGLOB_AB),&
             fixed_bdry_faces(6,NSPEC_AB), &
             roller_bdry_faces(6,NSPEC_AB))
@@ -685,6 +688,9 @@ module static_module
     do ispec = 1, NSPEC_AB
       if(.not. ispec_is_elastic(ispec)) cycle
       ibool0_loc(:,:,:) = ibool(:,:,:,ispec) - 1 ! convert to 0-based indexing for C
+
+      ! point to local stiffness matrix for this element
+      kloc => coo_v(:,:,:,:,ispec)
 
       ! compute kloc
       kloc(:,:,:,:) = 0.0_dp
@@ -791,9 +797,6 @@ module static_module
 
         enddo ! igll2
       enddo
-
-      ! assemble into global matrix in PETSc
-      call fill_mat_petsc(this%petcs_ptr, ibool0_loc, Kloc)
     enddo
 
     if(myrank == 0) then 
@@ -804,7 +807,7 @@ module static_module
     endif
 
     ! assemble global matrix in PETSc
-    call assemble_petsc(this%petcs_ptr)
+    call fill_mat_petsc(this%petsc_ptr, coo_v)
 
     call synchronize_all();
 
@@ -816,10 +819,10 @@ module static_module
     endif
 
     ! solve the linear system using PETSc
-    call solve_petsc(this%petcs_ptr)
+    call solve_petsc(this%petsc_ptr)
 
     ! copy results to displ_dp for later use, note that PETSc uses 0-based indexing while Fortran uses 1-based indexing, so we need to add 1 to the indices when copying
-    call extract_petsc(this%petcs_ptr, displ_dp)
+    call extract_petsc(this%petsc_ptr, displ_dp)
 
     displ(:,:) = real(displ_dp(:,:), kind=CUSTOM_REAL)
 
@@ -827,11 +830,11 @@ module static_module
     call compute_forces_static(displ,.false., kdotu, ssol%stress, ssol%strain)
 
     ! free allocated arrays
-    deallocate(Kloc, displ_dp, kdotu, fixed_bdry_faces, roller_bdry_faces)
+    deallocate(coo_v, displ_dp, kdotu, fixed_bdry_faces, roller_bdry_faces)
     
   end subroutine solve_static_problem_petsc
 
-  !> main subroutine for static solution, CG metho is used
+  !> main subroutine for static solution, CG method is used
   subroutine static_problem_impl()
     use constants, only: MAX_STRING_LEN,NDIM
     use specfem_par, only: NGLOB_AB,NGLLX,NGLLY,NGLLZ,myrank 
@@ -1565,7 +1568,7 @@ module static_module
     this%owner_rank(:) = myrank
 
     ! build ownership metadata and create the PETSc backend context
-    call setup_petsc(this%petcs_ptr, nglob, myrank, &
+    call setup_petsc(this%petsc_ptr, nglob, myrank, &
                      nspec, NGLL3, NDIM, &
                      num_interfaces_ext_mesh, &
                      nibool_interfaces_ext_mesh, &
@@ -1586,7 +1589,7 @@ module static_module
     if(.not. this%USE_PETSC_AS_BACKEND) return
 
     ! destroy PETSc solver context
-    call cleanup_petsc(this%petcs_ptr)
+    call cleanup_petsc(this%petsc_ptr)
 
     ! deallocate owner ranks
     if (allocated(this%owner_rank)) deallocate(this%owner_rank)

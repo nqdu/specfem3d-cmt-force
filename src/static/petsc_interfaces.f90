@@ -1,5 +1,14 @@
 !> @file petsc_interfaces.f90
-!> @brief Fortran iso_c_binding interfaces to the C PETSc FEM routines in petsc_routines.c.
+!> @brief Fortran iso_c_binding interfaces to the C PETSc FEM routines.
+!>
+!> Two interchangeable C implementations expose the symbols declared here:
+!>   - petsc_routines.c     : AIJ/BAIJ MatSetValuesBlockedLocal assembly
+!>   - petsc_routines_coo.c : MatSetPreallocationCOO / MatSetValuesCOO
+!>                            assembly for the stiffness matrix (the RHS
+!>                            vector still uses VecSetValuesBlockedLocal)
+!>
+!> Both implementations share the same Fortran-callable API, so callers
+!> never need to know which one is linked.
 !>
 !> Usage pattern:
 !> @code
@@ -63,41 +72,44 @@ module petsc_interfaces
       integer(c_int),  intent(out)       :: owner_rank(*)
     end subroutine setup_petsc
 
-    !> @brief Accumulate one element's stiffness block into the global matrix.
+    !> @brief Push the full element-wise stiffness contribution into K.
     !>
-    !> @param[in] h              Solver context handle.
-    !> @param[in] global_indices 0-based global node indices (length NGLL3).
-    !> @param[in] k_elem         Dense element stiffness values (row-major, NGLL3*NDIM x NGLL3*NDIM).
-    subroutine fill_mat_petsc(h, global_indices, k_elem) &
+    !> COO backend: @p coo_v has length NSPEC*(NGLL3*NDIM)**2 and is laid out
+    !> per element as Fortran Kloc(NDIM,NGLL3,NDIM,NGLL3,NSPEC) (i.e. exactly
+    !> the layout produced by writing each element's Kloc block contiguously
+    !> in ispec order). The call delegates to MatSetValuesCOO, which sums
+    !> duplicate (i,j) entries, routes off-rank values, and leaves K
+    !> assembled.
+    !>
+    !> AIJ backend (petsc_routines.c): the same @p coo_v buffer is used in a
+    !> per-block loop through MatSetValuesBlockedLocal — see that file for
+    !> details. Stubs (no-PETSc build) ignore the argument.
+    !>
+    !> @param[in] h     Solver context handle.
+    !> @param[in] coo_v Stiffness values, length NSPEC*(NGLL3*NDIM)**2.
+    subroutine fill_mat_petsc(h, coo_v) &
         bind(C, name="fill_mat_petsc_")
-      import c_long, c_int, c_double
+      import c_long, c_double
       implicit none
       integer(c_long), intent(in) :: h
-      integer(c_int),  intent(in) :: global_indices(*)
-      real(c_double),  intent(in) :: k_elem(*)
+      real(c_double),  intent(in) :: coo_v(*)
     end subroutine fill_mat_petsc
 
     !> @brief Accumulate one element's force vector into the global RHS vector.
     !>
-    !> @param[in] h              Solver context handle.
-    !> @param[in] global_indices 0-based global node indices (length NGLL3).
-    !> @param[in] f_elem         Element force values (length NGLL3*NDIM, DOF-then-node order).
-    subroutine fill_vec_petsc(h, global_indices, f_elem) &
+    !> Identical in both backends: values are added via VecSetValuesBlockedLocal
+    !> with ADD_VALUES and merged across ranks inside assemble_petsc.
+    !>
+    !> @param[in] h             Solver context handle.
+    !> @param[in] f_elem        Element force values (length NSPEC*NGLL3*NDIM, Fortran order: f_elem(NDIM,NGLL3,NSPEC) i.e. ispec-fastest, then GLL, then dim
+    !>                          DOF-fastest order).
+    subroutine fill_vec_petsc(h, f_elem) &
         bind(C, name="fill_vec_petsc_")
       import c_long, c_int, c_double
       implicit none
       integer(c_long), intent(in) :: h
-      integer(c_int),  intent(in) :: global_indices(*)
       real(c_double),  intent(in) :: f_elem(*)
     end subroutine fill_vec_petsc
-
-    !> @brief Finalise global matrix and RHS vector assembly (triggers MPI communication).
-    !> @param[in] h  Solver context handle.
-    subroutine assemble_petsc(h) bind(C, name="assemble_petsc_")
-      import c_long
-      implicit none
-      integer(c_long), intent(in) :: h
-    end subroutine assemble_petsc
 
     !> @brief Solve the assembled linear system K*u = f.
     !> @param[in] h  Solver context handle.

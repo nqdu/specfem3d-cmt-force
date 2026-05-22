@@ -655,6 +655,9 @@ VTK_INCLUDES
 VTK_MAJOR
 OMP_LIB
 OMP_FCFLAGS
+PETSCLIBS
+PETSC_CPPFLAGS
+WITH_PETSC
 COND_HIP_PLATFORM_CPU_FALSE
 COND_HIP_PLATFORM_CPU_TRUE
 COND_HIP_PLATFORM_NVIDIA_FALSE
@@ -875,6 +878,7 @@ with_hip
 with_openmp
 enable_openmp
 enable_vtk
+enable_petsc
 with_adios
 with_adios2
 with_asdf
@@ -905,6 +909,8 @@ SCOTCH_LIBDIR
 MPIFC
 MPILIBS
 MPICC
+PETSC_CPPFLAGS
+PETSCLIBS
 FLAGS_CHECK
 LOCAL_PATH_IS_ALSO_GLOBAL
 MPI_INC
@@ -1559,6 +1565,7 @@ Optional Features:
                           [default=auto]
   --enable-openmp         build OpenMP enabled version [default=no]
   --enable-vtk            build VTK enabled version [default=no]
+  --enable-petsc          build PETSc linear solver backend [default=no]
 
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
@@ -1609,6 +1616,9 @@ Some influential environment variables:
   MPIFC       MPI Fortran compiler command
   MPILIBS     extra libraries for linking MPI programs
   MPICC       MPI C compiler command
+  PETSC_CPPFLAGS
+              PETSc preprocessor flags
+  PETSCLIBS   PETSc libraries for linking programs
   FLAGS_CHECK Fortran compiler flags
   LOCAL_PATH_IS_ALSO_GLOBAL
               files on a local path on each node are also seen as global with
@@ -3774,6 +3784,20 @@ fi
 else
   COND_VTK_TRUE='#'
   COND_VTK_FALSE=
+fi
+
+
+###
+### PETSc
+###
+
+# Check whether --enable-petsc was given.
+if test ${enable_petsc+y}
+then :
+  enableval=$enable_petsc; want_petsc="$enableval"
+else case e in #(
+  e) want_petsc=no ;;
+esac
 fi
 
 
@@ -9121,6 +9145,67 @@ fi
     # in case adios2 c file compilation needs mpi
 
 
+fi
+
+###
+### PETSc
+###
+
+if test x"$want_petsc" != xno
+then :
+
+  printf "%s\n" "## ----- ##
+## PETSc ##
+## ----- ##"
+
+  if test "$want_mpi" != yes; then
+    as_fn_error $? "Cannot compile with PETSc without MPI." "$LINENO" 5
+  fi
+
+  if test x"$PKG_CONFIG" = x; then
+    PKG_CONFIG=pkg-config
+  fi
+  if ! "$PKG_CONFIG" --version >/dev/null 2>&1; then
+    as_fn_error $? "pkg-config is required to enable PETSc." "$LINENO" 5
+  fi
+
+  if test x"$PETSC_CPPFLAGS" = x || test x"$PETSCLIBS" = x; then
+    { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for PETSc pkg-config module" >&5
+printf %s "checking for PETSc pkg-config module... " >&6; }
+    petsc_pkg_name=
+    for petsc_candidate in PETSc petsc; do
+      if "$PKG_CONFIG" --exists "$petsc_candidate"; then
+        petsc_pkg_name=$petsc_candidate
+        break
+      fi
+    done
+    if test -z "$petsc_pkg_name"; then
+      { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: not found" >&5
+printf "%s\n" "not found" >&6; }
+      as_fn_error $? "PETSc pkg-config module not found; set PETSC_CPPFLAGS and PETSCLIBS manually or adjust PKG_CONFIG_PATH." "$LINENO" 5
+    fi
+    { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $petsc_pkg_name" >&5
+printf "%s\n" "$petsc_pkg_name" >&6; }
+
+    if test x"$PETSC_CPPFLAGS" = x; then
+      PETSC_CPPFLAGS=`$PKG_CONFIG --cflags "$petsc_pkg_name"`
+    fi
+    if test x"$PETSCLIBS" = x; then
+      PETSCLIBS=`$PKG_CONFIG --libs "$petsc_pkg_name"`
+    fi
+  fi
+
+  CPPFLAGS="$CPPFLAGS $PETSC_CPPFLAGS"
+  WITH_PETSC=yes
+
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: PETSc preprocessor flags: $PETSC_CPPFLAGS" >&5
+printf "%s\n" "$as_me: PETSc preprocessor flags: $PETSC_CPPFLAGS" >&6; }
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: PETSc libraries: $PETSCLIBS" >&5
+printf "%s\n" "$as_me: PETSc libraries: $PETSCLIBS" >&6; }
+
+else case e in #(
+  e) WITH_PETSC=no ;;
+esac
 fi
 
 ###
