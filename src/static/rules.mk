@@ -41,6 +41,23 @@ static3D_EXTRA_LIBS =
 static3D_CPPFLAGS =
 endif
 
+# static_gpu.cu: only built (against src/gpu's CUDA/HIP headers) when GPU support is on,
+# otherwise static_module.f90 links against the no-op stubs in
+# src/gpu/specfem3D_gpu_cuda_method_stubs.c (part of specfem3D_SPECFEM_OBJECTS already)
+ifeq ($(HAS_GPU),yes)
+  ifeq ($(CUDA),yes)
+    # NVCC_FLAGS uses -dc (relocatable device code), so the raw compiled object still needs
+    # its own "nvcc -dlink" pass before the host linker can use it -- mirrors how
+    # cuda_specfem3D_DEVICE_OBJ is built from gpu_specfem3D_OBJECTS in src/gpu/rules.mk
+    static3D_GPU_OBJECT = $O/static_gpu.static_cuda.o $O/static_gpu_dlink.static_cuda.o
+  endif
+  ifeq ($(HIP),yes)
+    static3D_GPU_OBJECT = $O/static_gpu.static_hip.o
+  endif
+else
+static3D_GPU_OBJECT =
+endif
+
 #######################################
 
 ####
@@ -54,8 +71,11 @@ static3D_TARGETS = \
 static3D_OBJECTS = \
 	$O/petsc_interfaces.static_module.o \
 	$O/static_module.static_module.o \
+	$O/static_init.static_module.o \
+	$O/static_impl.static_module.o \
 	$O/xstatic3D.static.o \
 	$(static3D_PETSC_OBJECT) \
+	$(static3D_GPU_OBJECT) \
 	$(EMPTY_MACRO)
 
 # specfem3D objects without the main program entry point
@@ -99,6 +119,11 @@ $E/xstatic3D: $(static3D_OBJECTS) $(static3D_SPECFEM_OBJECTS) $(specfem3D_SHARED
 
 $O/static_module.static_module.o: $O/petsc_interfaces.static_module.o
 
+## submodules (static_impl.f90/static_init.f90) implement the module procedures declared in
+## static_module.f90, so they must be compiled after it produces its .mod/.smod
+$O/static_init.static_module.o: $O/static_module.static_module.o
+$O/static_impl.static_module.o: $O/static_module.static_module.o
+
 $O/petsc_interfaces.static_module.o: $S/petsc_interfaces.f90
 	${FCCOMPILE_CHECK} ${FCFLAGS_f90} $(static3D_CPPFLAGS) -c -o $@ $<
 
@@ -118,3 +143,18 @@ $O/petsc_routines.static_c.o: $S/petsc_routines.c ${SETUP}/config.h
 
 $O/petsc_routines_stubs.static_c.o: $S/petsc_routines_stubs.c ${SETUP}/config.h
 	${CC} -c $(CPPFLAGS) $(CFLAGS) $(MPI_INCLUDES) -o $@ $<
+
+## static_gpu.cu: uses src/gpu's mesh_constants_gpu.h / CUDA / HIP headers and NVCC_FLAGS,
+## SELECTOR_CFLAG etc. defined in src/gpu/rules.mk; mesh_constants_cuda.h pulls in
+## kernels/kernel_proto.cu.h, so the kernels/ dir needs to be on the include path too
+GPU_S := ${S_TOP}/src/gpu
+GPU_KERNEL_DIR := $(GPU_S)/kernels
+
+$O/static_gpu.static_cuda.o: $S/static_gpu.cu ${SETUP}/config.h $(GPU_S)/mesh_constants_gpu.h $(GPU_S)/mesh_constants_cuda.h
+	${NVCC} -c $< -o $@ $(NVCC_FLAGS) -I${SETUP} -I$(GPU_S) -I$(GPU_KERNEL_DIR) $(SELECTOR_CFLAG)
+
+$O/static_gpu_dlink.static_cuda.o: $O/static_gpu.static_cuda.o
+	${NVCCLINK} -o $@ $^
+
+$O/static_gpu.static_hip.o: $S/static_gpu.cu ${SETUP}/config.h $(GPU_S)/mesh_constants_gpu.h $(GPU_S)/mesh_constants_hip.h
+	${HIPCC} ${HIP_CFLAG_ENDING} -c $< -o $@ $(HIPCC_CFLAGS) -I${SETUP} -I$(GPU_S) -I$(GPU_KERNEL_DIR) $(SELECTOR_CFLAG)

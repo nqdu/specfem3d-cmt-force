@@ -1206,3 +1206,25 @@ void FC_FUNC_(compute_seismograms_cuda,
                                         int* ELASTIC_SIMULATION,
                                         int* USE_TRICK_FOR_BETTER_PRESSURE) {}
 
+
+//
+// src/static/static_gpu.cu
+//
+
+void FC_FUNC_(prepare_cg_solver_gpu,
+              PREPARE_CG_SOLVER_GPU)(long* Container, long* Mesh_pointer, int* NGLOB_AB_f, int* NSPEC_AB_f, int* myrank_f,
+                                     int* nspec_outer_elastic_f, int* nspec_inner_elastic_f,
+                                     realw* force_ext, realw* inv_mult,
+                                     int* num_fixed_bdry_faces_f, int* fixed_bdry_ispec, int* fixed_bdry_ijk,
+                                     int* num_roller_bdry_faces_f, int* roller_bdry_ispec, int* roller_bdry_ijk,
+                                     realw* roller_bdry_normal,
+                                     int* NPROC_f,
+                                     int* nibool_interfaces_ext_mesh, int* my_neighbors_ext_mesh,
+                                     realw* buffer_send_vector_ext_mesh, realw* buffer_recv_vector_ext_mesh,
+                                     int* request_send_vector_ext_mesh, int* request_recv_vector_ext_mesh) {}
+
+void FC_FUNC_(run_cg_solver_gpu,
+              RUN_CG_SOLVER_GPU)(long* Container, long* Mesh_pointer, int* maxiter_f, realw* omega,
+                                 double* rsinit_out, double* rsfinal_out, int* iter_out,
+                                 realw* displ_out, realw* stress_out, realw* strain_out) {}
+

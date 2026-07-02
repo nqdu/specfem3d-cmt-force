@@ -239,11 +239,16 @@
 
   endif ! NOISE_TOMOGRAPHY
 
-  ! prepares gravity-related arrays and shared integration weights
-  if (GRAVITY) then
+  ! prepares gravity-related arrays and shared integration weights.
+  ! also needed whenever ROTATION is enabled: the rotation force kernels (both the dynamic
+  ! solver's compute_rot_forces_viscoelastic_cuda_kernel and the static solver's
+  ! sf_compute_forces_static_kernel) reuse mp%d_rhostore/mp%d_wgll_cube, which are only
+  ! allocated inside prepare_fields_gravity_device() -- without this, ROTATION-only runs
+  ! (GRAVITY = .false.) dereference NULL device pointers.
+  if (GRAVITY .or. ROTATION) then
     ! user output
     if (myrank == 0) then
-      write(IMAIN,*) "  loading gravity"
+      write(IMAIN,*) "  loading gravity/rotation arrays (rhostore, wgll_cube)"
       call flush_IMAIN()
     endif
     call prepare_fields_gravity_device(Mesh_pointer,GRAVITY, &
